@@ -1,7 +1,7 @@
 // Copyright (C) ConfigHub, Inc.
 // SPDX-License-Identifier: MIT
 
-// Command argobot is a ConfigHub bot that force-syncs Argo CD applications.
+// Command k8sbot is a ConfigHub bot that force-syncs Argo CD applications.
 //
 // It listens on a ConfigHub Channel: it claims the Channel as the service
 // account whose key it holds and polls it, force-syncing the corresponding Argo CD Application
@@ -9,7 +9,7 @@
 // This makes a deploy feel immediate instead of waiting for Argo's next
 // reconciliation.
 //
-// argobot handles no commands yet, so a Channel it listens on declares none.
+// k8sbot handles no commands yet, so a Channel it listens on declares none.
 // Its reaction (force-sync) is its own; the event only says the desired state
 // for a (space, target) changed.
 //
@@ -32,7 +32,7 @@ import (
 )
 
 func main() {
-	printSubscriptions := flag.Bool("print-subscriptions", false, "print the Channel subscriptions argobot expects and exit")
+	printSubscriptions := flag.Bool("print-subscriptions", false, "print the Channel subscriptions k8sbot expects and exit")
 	flag.Parse()
 	if *printSubscriptions {
 		encoded, _ := json.MarshalIndent(subscriptions(), "", "  ")
@@ -58,20 +58,20 @@ func main() {
 		log.Fatalf("[FATAL] %v", err)
 	}
 
-	// Concurrency one: argobot runs no commands, and events are handled in
+	// Concurrency one: k8sbot runs no commands, and events are handled in
 	// delivery order on the poll goroutine regardless.
 	listener := channel.NewListener(hub, cubapi.ParseRef(cfg.Channel), channel.Options{Concurrency: 1}).
 		OnEvent(makeEventHandler(syncer, cfg))
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
-		log.Printf("[INFO] argobot starting; listening on channel %s at %s", cfg.Channel, cfg.ConfigHubURL)
+		log.Printf("[INFO] k8sbot starting; listening on channel %s at %s", cfg.Channel, cfg.ConfigHubURL)
 		return listener.Run(gctx)
 	})
 
 	// Once, at startup, store facts about the cluster on its Target. Like
 	// live-status reporting, it is best-effort: without cluster access or Edit
-	// on the Target, argobot warns and goes on syncing.
+	// on the Target, k8sbot warns and goes on syncing.
 	if cfg.Target != "" {
 		g.Go(func() error {
 			if err := collectTargetFacts(gctx, cfg, hub); err != nil && gctx.Err() == nil {
@@ -89,7 +89,7 @@ func main() {
 		if rep, err := newReporter(cfg, hub); err != nil {
 			log.Printf("[WARN] live-status reporting disabled: %v", err)
 		} else {
-			log.Printf("[INFO] argobot: live-status reporting enabled")
+			log.Printf("[INFO] k8sbot: live-status reporting enabled")
 			g.Go(func() error { return rep.Run(gctx) })
 		}
 	}
@@ -97,10 +97,10 @@ func main() {
 	if err := g.Wait(); err != nil && ctx.Err() == nil {
 		log.Fatalf("[FATAL] %v", err)
 	}
-	log.Printf("[INFO] argobot shutting down")
+	log.Printf("[INFO] k8sbot shutting down")
 }
 
-// newHubClient builds the one ConfigHub client argobot uses, as the service
+// newHubClient builds the one ConfigHub client k8sbot uses, as the service
 // account whose key it holds. Each session is bought with a short-lived
 // assertion signed by that key, so nothing replayable crosses the wire. The
 // client authenticates once here, so a bad key fails the start, and renews its
@@ -119,6 +119,6 @@ func newHubClient(ctx context.Context, cfg config) (*cubapi.Client, error) {
 		ServerURL:     cfg.ConfigHubURL,
 		Session:       session,
 		Authenticator: authenticate,
-		UserAgent:     "argobot",
+		UserAgent:     "k8sbot",
 	})
 }

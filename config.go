@@ -10,13 +10,13 @@ import (
 	"strings"
 )
 
-// config holds argobot's runtime configuration, all sourced from the environment.
+// config holds k8sbot's runtime configuration, all sourced from the environment.
 //
-// The ConfigHub key identifies argobot to ConfigHub; the Channel is the mailbox
-// it listens on. The Argo CD credentials are argobot's own authority against
+// The ConfigHub key identifies k8sbot to ConfigHub; the Channel is the mailbox
+// it listens on. The Argo CD credentials are k8sbot's own authority against
 // Argo CD — held out of band, never brokered through ConfigHub.
 //
-// argobot reacts to the ConfigHub events its Channel subscribes to: release
+// k8sbot reacts to the ConfigHub events its Channel subscribes to: release
 // facts, scoped on the Channel to whatever Spaces or Targets the
 // operator chose. It force-syncs the corresponding Argo CD Application, Sveltos
 // profile or Flux OCIRepository, which comes from ArgoApp when set (Argo CD
@@ -26,25 +26,25 @@ import (
 type config struct {
 	ConfigHubURL string
 
-	// PrivateKey is the service account key argobot authenticates with, as a
+	// PrivateKey is the service account key k8sbot authenticates with, as a
 	// private JWK. It signs a short-lived assertion per session, so ConfigHub
 	// holds only the public half. AssertionAudience is needed only on a server
 	// that sets CONFIGHUB_ASSERTION_AUDIENCE to something other than its default.
 	PrivateKey        string
 	AssertionAudience string
 
-	// Channel names the ConfigHub Channel argobot claims and polls, as
+	// Channel names the ConfigHub Channel k8sbot claims and polls, as
 	// <space>/<slug> or a UUID. What it delivers — which event types, for which
 	// Spaces and Targets — is the Channel's Subscriptions, set with cub, not here.
 	Channel string
 
-	// Target names the ConfigHub Target that represents the cluster argobot
-	// runs in, as <space>/<slug> or a UUID. When it is set, argobot collects
+	// Target names the ConfigHub Target that represents the cluster k8sbot
+	// runs in, as <space>/<slug> or a UUID. When it is set, k8sbot collects
 	// facts about the cluster at startup and stores them on the Target; when it
 	// is not, it collects none.
 	Target string
 
-	// Controller selects the GitOps controller argobot drives: "argocd"
+	// Controller selects the GitOps controller k8sbot drives: "argocd"
 	// (default), "sveltos" or "flux". The Argo* settings below apply to Argo CD
 	// only.
 	Controller string
@@ -53,7 +53,7 @@ type config struct {
 	// up (defaults to "flux-system"). Flux only.
 	FluxNamespace string
 
-	// ArgoSyncMode selects how argobot triggers a sync: "kubernetes" (default)
+	// ArgoSyncMode selects how k8sbot triggers a sync: "kubernetes" (default)
 	// patches the Application's refresh annotation via the Kubernetes API;
 	// "argocd" calls the Argo CD REST /sync endpoint.
 	ArgoSyncMode string
@@ -83,15 +83,15 @@ type config struct {
 	ReportLiveStatus bool
 }
 
-// retiredEnv names the variables argobot read when it connected as a worker, each
+// retiredEnv names the variables k8sbot read when it connected as a worker, each
 // with why it no longer does. One that is still set is ignored with a warning
 // rather than silently: a deployment that sets it expects it to do something.
 var retiredEnv = []struct{ name, reason string }{
-	{"CONFIGHUB_WORKER_ID", "argobot authenticates with the service account key in CONFIGHUB_AUTH_PRIVATE_KEY"},
-	{"CONFIGHUB_WORKER_SECRET", "argobot authenticates with the service account key in CONFIGHUB_AUTH_PRIVATE_KEY"},
-	{"CONFIGHUB_SUBSCRIPTION_NAME", "the events argobot receives are the Subscriptions of its channel"},
-	{"CONFIGHUB_EVENT_SPACE_ID", "the events argobot receives are the Subscriptions of its channel"},
-	{"CONFIGHUB_EVENT_TARGET_ID", "the events argobot receives are the Subscriptions of its channel"},
+	{"CONFIGHUB_WORKER_ID", "k8sbot authenticates with the service account key in CONFIGHUB_AUTH_PRIVATE_KEY"},
+	{"CONFIGHUB_WORKER_SECRET", "k8sbot authenticates with the service account key in CONFIGHUB_AUTH_PRIVATE_KEY"},
+	{"CONFIGHUB_SUBSCRIPTION_NAME", "the events k8sbot receives are the Subscriptions of its channel"},
+	{"CONFIGHUB_EVENT_SPACE_ID", "the events k8sbot receives are the Subscriptions of its channel"},
+	{"CONFIGHUB_EVENT_TARGET_ID", "the events k8sbot receives are the Subscriptions of its channel"},
 }
 
 func loadConfig() (config, error) {

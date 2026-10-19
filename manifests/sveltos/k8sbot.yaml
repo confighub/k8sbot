@@ -1,42 +1,42 @@
 # Copyright (C) ConfigHub, Inc.
 # SPDX-License-Identifier: MIT
 #
-# Complete, self-documenting Kubernetes deployment for argobot driving Sveltos,
-# the Sveltos variant of ../argobot.yaml. Install it on the Sveltos management
+# Complete, self-documenting Kubernetes deployment for k8sbot driving Sveltos,
+# the Sveltos variant of ../k8sbot.yaml. Install it on the Sveltos management
 # cluster: that is where ClusterProfiles, ClusterSummaries and HealthCheckReports
 # live.
 #
-# Every environment variable argobot reads under Sveltos appears in the
+# Every environment variable k8sbot reads under Sveltos appears in the
 # Deployment's env list below. The ARGO_*/ARGOCD_* variables are Argo CD only and
 # are ignored here.
 #
-# The Deployment reads its credentials from a Secret named argobot-secrets via
+# The Deployment reads its credentials from a Secret named k8sbot-secrets via
 # secretKeyRef. That Secret is deliberately NOT defined here: supply it out of
 # band (your secret store / External Secrets, or `kubectl create secret generic
-# argobot-secrets --from-literal=...`). Expected key: CONFIGHUB_AUTH_PRIVATE_KEY
+# k8sbot-secrets --from-literal=...`). Expected key: CONFIGHUB_AUTH_PRIVATE_KEY
 # (the service account's private JWK).
 #
 # The release workflow publishes only manifests/*.yaml as the config bundle, so
-# this variant is not part of ghcr.io/confighub/configs/argobot.
+# this variant is not part of ghcr.io/confighub/configs/k8sbot.
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: argobot
+  name: k8sbot
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: argobot
-  namespace: argobot
+  name: k8sbot
+  namespace: k8sbot
 ---
-# Forcing a redeploy: argobot patches the profile.projectsveltos.io/redeploy
+# Forcing a redeploy: k8sbot patches the profile.projectsveltos.io/redeploy
 # annotation on the ClusterProfile (cluster-scoped) or Profile (namespaced) that
 # deploys a Space. Sveltos's profiles aren't confined to one namespace, so this is
 # a ClusterRole; it grants nothing beyond reading and patching profiles.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: argobot-sveltos
+  name: k8sbot-sveltos
 rules:
   - apiGroups: ["config.projectsveltos.io"]
     resources: ["clusterprofiles", "profiles"]
@@ -45,17 +45,17 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: argobot-sveltos
+  name: k8sbot-sveltos
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: argobot-sveltos
+  name: k8sbot-sveltos
 subjects:
   - kind: ServiceAccount
-    name: argobot
-    namespace: argobot
+    name: k8sbot
+    namespace: k8sbot
 ---
-# Cluster-wide read-only access for live-status reporting: argobot watches
+# Cluster-wide read-only access for live-status reporting: k8sbot watches
 # Sveltos HealthCheckReports and ClusterSummaries in every namespace (a remote
 # cluster's reports are collected into the management cluster). get/list/watch
 # only.
@@ -67,7 +67,7 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: argobot-read
+  name: k8sbot-read
 rules:
   # Core API group, minus Secrets.
   - apiGroups: [""]
@@ -105,22 +105,22 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: argobot-read
+  name: k8sbot-read
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: argobot-read
+  name: k8sbot-read
 subjects:
   - kind: ServiceAccount
-    name: argobot
-    namespace: argobot
+    name: k8sbot
+    namespace: k8sbot
 ---
-# Live status: Sveltos records no digest of what it fetched, so argobot reads the
+# Live status: Sveltos records no digest of what it fetched, so k8sbot reads the
 # deployed objects themselves. This HealthCheck collects every object carrying
 # confighub.com/origin (which names its Space, Unit and Revision) and judges its
 # health; Sveltos writes the result as a HealthCheckReport per cluster.
 #
-# Coverage: it must select at least one object of every Unit, or argobot can't
+# Coverage: it must select at least one object of every Unit, or k8sbot can't
 # tell which revision of an unselected Unit is running and reports nothing for
 # that Space. Add any other kind your Releases contain to resourceSelectors.
 # Secrets are left out so their contents are never copied into reports.
@@ -136,7 +136,7 @@ subjects:
 apiVersion: lib.projectsveltos.io/v1beta1
 kind: HealthCheck
 metadata:
-  name: argobot-live-status
+  name: k8sbot-live-status
 spec:
   collectResources: true
   resourceSelectors:
@@ -191,18 +191,18 @@ spec:
 apiVersion: lib.projectsveltos.io/v1beta1
 kind: ClusterHealthCheck
 metadata:
-  name: argobot-live-status
+  name: k8sbot-live-status
 spec:
   clusterSelector:
     matchLabels:
       sveltos-agent: present
   livenessChecks:
-    - name: argobot-live-status
+    - name: k8sbot-live-status
       type: HealthCheck
       livenessSourceRef:
         kind: HealthCheck
         apiVersion: lib.projectsveltos.io/v1beta1
-        name: argobot-live-status
+        name: k8sbot-live-status
   notifications:
     - name: event
       type: KubernetesEvent
@@ -210,34 +210,34 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: argobot
-  namespace: argobot
+  name: k8sbot
+  namespace: k8sbot
   labels:
-    app: argobot
+    app: k8sbot
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: argobot
+      app: k8sbot
   template:
     metadata:
       labels:
-        app: argobot
+        app: k8sbot
     spec:
-      serviceAccountName: argobot
+      serviceAccountName: k8sbot
       containers:
-        - name: argobot
-          image: ghcr.io/confighub/argobot:latest
+        - name: k8sbot
+          image: ghcr.io/confighub/k8sbot:latest
           env:
             # ── ConfigHub connection (required) ──────────────────────────────
             - name: CONFIGHUB_URL
               value: "https://hub.confighub.com"
-            # The service account key argobot authenticates with: a private
+            # The service account key k8sbot authenticates with: a private
             # JWK, as `cub serviceaccount key add --generate` writes it.
             - name: CONFIGHUB_AUTH_PRIVATE_KEY
               valueFrom:
                 secretKeyRef:
-                  name: argobot-secrets
+                  name: k8sbot-secrets
                   key: CONFIGHUB_AUTH_PRIVATE_KEY
             # Only for a server whose CONFIGHUB_ASSERTION_AUDIENCE is not the default.
             # - name: CONFIGHUB_ASSERTION_AUDIENCE
@@ -251,15 +251,15 @@ spec:
               value: "sveltos"
 
             # ── Channel ──────────────────────────────────────────────────────
-            # The ConfigHub Channel argobot claims and polls, as <space>/<slug>
+            # The ConfigHub Channel k8sbot claims and polls, as <space>/<slug>
             # or a UUID. Which events it delivers (and for which Spaces and
             # Targets) is the Channel's Subscriptions, set with cub, not here.
             - name: CONFIGHUB_CHANNEL
-              value: "my-cluster/argobot"
+              value: "my-cluster/k8sbot"
 
             # ── Cluster facts ────────────────────────────────────────────────
             # The ConfigHub Target that represents this cluster, as
-            # <space>/<slug> or a UUID. When set, argobot collects facts about
+            # <space>/<slug> or a UUID. When set, k8sbot collects facts about
             # the cluster (Kubernetes version, served resource types, storage
             # and ingress classes) at startup and stores them on the Target
             # under "Cluster.". Needs Edit on the Target.
@@ -267,7 +267,7 @@ spec:
             #   value: "my-cluster/target"
 
             # ── Live-status reporting ────────────────────────────────────────
-            # argobot watches the HealthCheckReports the HealthCheck above
+            # k8sbot watches the HealthCheckReports the HealthCheck above
             # produces and writes each Release's sync/health back to ConfigHub as
             # its LiveStatus. On by default; set to "false" to disable.
             # - name: CONFIGHUB_REPORT_LIVE_STATUS

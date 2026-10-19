@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/confighub/argobot/kube"
+	"github.com/confighub/k8sbot/kube"
 	"github.com/confighub/sdk/core/cubapi"
 	"github.com/confighub/sdk/core/livestatus"
 	goclientnew "github.com/confighub/sdk/core/openapi/goclient-new"
@@ -33,8 +33,8 @@ const (
 	liveStatusResync = 10 * time.Minute
 	// liveStatusMaxMessage caps the Message field at the length ConfigHub accepts.
 	liveStatusMaxMessage = 1024
-	// liveStatusReporter identifies argobot as the reporting client.
-	liveStatusReporter = "argobot"
+	// liveStatusReporter identifies k8sbot as the reporting client.
+	liveStatusReporter = "k8sbot"
 	// ociSpacePathSep precedes the deployment Space slug in an Application's OCI
 	// source repoURL: .../space/<space-slug>.
 	ociSpacePathSep = "/space/"
@@ -48,10 +48,10 @@ const (
 // Release in-process. The Application's OCI source (.../space/<slug>), or
 // equivalently its name, names the deployment Space, and its synced revision is
 // the ManifestDigest of the Release it is running; the newest Release of the Space
-// with that ManifestDigest is the one. argobot's identity can read the Spaces and
+// with that ManifestDigest is the one. k8sbot's identity can read the Spaces and
 // Releases of the Target it is granted on, and EditChildren on that Target lets it
 // write the Releases' LiveStatus. An Application whose Space or Release does not resolve
-// is ignored, which is also the filter for "an Application argobot is
+// is ignored, which is also the filter for "an Application k8sbot is
 // responsible for".
 //
 // It is best-effort feedback, not control: a dropped or delayed report costs
@@ -77,7 +77,7 @@ type statusReporter interface {
 }
 
 // newReporter builds the live-status reporter for the configured controller,
-// writing through hub, the ConfigHub client argobot shares with its channel
+// writing through hub, the ConfigHub client k8sbot shares with its channel
 // listener.
 func newReporter(cfg config, hub *cubapi.Client) (statusReporter, error) {
 	switch cfg.Controller {
@@ -89,7 +89,7 @@ func newReporter(cfg config, hub *cubapi.Client) (statusReporter, error) {
 	return newArgoReporter(cfg, hub)
 }
 
-// liveStatusWriter writes a Release's LiveStatus to ConfigHub as argobot's
+// liveStatusWriter writes a Release's LiveStatus to ConfigHub as k8sbot's
 // identity, through the client its listener uses. Every reporter embeds it.
 type liveStatusWriter struct {
 	api *goclientnew.ClientWithResponses
@@ -207,7 +207,7 @@ func (r *reporter) enqueue(obj any) {
 
 // report projects the current state of the Application named by key and, if it
 // changed since the last write, writes it to the LiveStatus of the Release the
-// Application is running. Applications whose Space or Release argobot cannot see
+// Application is running. Applications whose Space or Release k8sbot cannot see
 // are ignored.
 func (r *reporter) report(ctx context.Context, key string) error {
 	obj, exists, err := r.informer.GetStore().GetByKey(key)
@@ -228,7 +228,7 @@ func (r *reporter) report(ctx context.Context, key string) error {
 	slug := deploymentSpaceSlug(u)
 	spaceID, known := r.getSpaceID(ctx, slug)
 	if !known {
-		// Slug did not resolve to a Space argobot can see -- not ours.
+		// Slug did not resolve to a Space k8sbot can see -- not ours.
 		return nil
 	}
 	revision, _, _ := unstructured.NestedString(u.Object, "status", "sync", "revision")
@@ -269,7 +269,7 @@ func (r *reporter) report(ctx context.Context, key string) error {
 	return nil
 }
 
-// getSpaceID resolves a deployment Space slug to its id, caching hits. argobot
+// getSpaceID resolves a deployment Space slug to its id, caching hits. k8sbot
 // can read the Spaces that release to the Target it is granted on, which are the
 // deployment Spaces it reports on, so a slug that resolves is one it is
 // responsible for. A slug that does not resolve (not found, or a Space it cannot
@@ -336,7 +336,7 @@ func (r *releaseLookup) getReleaseID(ctx context.Context, spaceID uuid.UUID, man
 	return newest.ReleaseID, true, nil
 }
 
-// patchRelease writes status as the Release's LiveStatus. argobot is authorized
+// patchRelease writes status as the Release's LiveStatus. k8sbot is authorized
 // by EditChildren on the Release's Target.
 func (r *liveStatusWriter) patchRelease(ctx context.Context, spaceID, releaseID uuid.UUID, status goclientnew.ReleaseLiveStatus) error {
 	liveStatus, err := mergePatchObject(status)

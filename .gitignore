@@ -1,5 +1,5 @@
 # Built binary (do not commit executables)
-/argobot
+/k8sbot
 *.exe
 
 # Local env

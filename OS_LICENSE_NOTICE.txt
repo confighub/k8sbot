@@ -1,10 +1,10 @@
-argobot Image — Operating System Layer Notices and Written Offer for Source
+k8sbot Image — Operating System Layer Notices and Written Offer for Source
 ===========================================================================
 
-The argobot container image is built on the Alpine Linux base image, pinned by
+The k8sbot container image is built on the Alpine Linux base image, pinned by
 digest in the Dockerfile. It provides the operating-system-level packages that are
-distributed, unmodified, as part of the image. They are separate from argobot
-itself (MIT, see LICENSE) and from the Go modules linked into the argobot binary,
+distributed, unmodified, as part of the image. They are separate from k8sbot
+itself (MIT, see LICENSE) and from the Go modules linked into the k8sbot binary,
 which are listed in THIRD_PARTY_LICENSES.txt.
 
 Most of these packages are under permissive licenses (MIT, BSD, Apache-2.0,
@@ -19,7 +19,7 @@ dual licenses that include it. As of the pinned Alpine 3.24.1 base, those are:
 
 The authoritative, per-release inventory with exact versions is the SBOM
 attestation attached to each published image manifest (`docker buildx imagetools
-inspect ghcr.io/confighub/argobot:<tag> --format '{{json .SBOM}}'`). To list what
+inspect ghcr.io/confighub/k8sbot:<tag> --format '{{json .SBOM}}'`). To list what
 is in a specific image, run `syft <image>` or `apk list --installed` inside a
 container started from it.
 

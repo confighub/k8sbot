@@ -16,7 +16,7 @@ permissions:
   packages: write
 
 env:
-  IMAGE: ghcr.io/confighub/argobot
+  IMAGE: ghcr.io/confighub/k8sbot
 
 jobs:
   build:

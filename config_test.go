@@ -14,7 +14,7 @@ func setBaseEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("CONFIGHUB_URL", "https://hub.example.com")
 	t.Setenv("CONFIGHUB_AUTH_PRIVATE_KEY", `{"kty":"OKP","crv":"Ed25519","x":"x","d":"d"}`)
-	t.Setenv("CONFIGHUB_CHANNEL", "my-cluster/argobot")
+	t.Setenv("CONFIGHUB_CHANNEL", "my-cluster/k8sbot")
 	for _, k := range []string{
 		"GITOPS_CONTROLLER", "ARGO_SYNC_MODE", "ARGOCD_SERVER", "ARGOCD_AUTH_TOKEN",
 		"ARGO_NAMESPACE", "ARGO_REFRESH_TYPE", "ARGO_APP", "FLUX_NAMESPACE",

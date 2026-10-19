@@ -28,7 +28,7 @@ RUN go mod download
 COPY . .
 ARG TARGETOS
 ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /go/bin/argobot .
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /go/bin/k8sbot .
 
 #################
 # Runtime stage #
@@ -41,11 +41,11 @@ FROM ${ALPINE_BASE}
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 USER 1000:3000
 WORKDIR /app
-COPY --from=builder /go/bin/argobot .
+COPY --from=builder /go/bin/k8sbot .
 # Third-party notices shipped with the image (MIT/BSD/Apache require them to
 # accompany binary distributions):
-#   THIRD_PARTY_LICENSES.txt — Go modules linked into the argobot binary;
+#   THIRD_PARTY_LICENSES.txt — Go modules linked into the k8sbot binary;
 #                              regenerate with scripts/gen-third-party-licenses.sh
 #   OS_LICENSE_NOTICE.txt    — Alpine base OS packages + GPL source offer
 COPY --from=builder /go/src/app/LICENSE /go/src/app/THIRD_PARTY_LICENSES.txt /go/src/app/OS_LICENSE_NOTICE.txt ./
-ENTRYPOINT ["/app/argobot"]
+ENTRYPOINT ["/app/k8sbot"]

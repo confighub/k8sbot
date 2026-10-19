@@ -80,7 +80,7 @@ func NewDynamicClient() (dynamic.Interface, error) {
 }
 
 // RestConfig prefers in-cluster credentials and falls back to a kubeconfig
-// file. It is shared by everything in argobot that talks to the cluster.
+// file. It is shared by everything in k8sbot that talks to the cluster.
 func RestConfig() (*rest.Config, error) {
 	if cfg, err := rest.InClusterConfig(); err == nil {
 		return cfg, nil

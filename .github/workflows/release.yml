@@ -36,8 +36,8 @@ permissions:
   packages: write
 
 env:
-  IMAGE: ghcr.io/confighub/argobot
-  BUNDLE: ghcr.io/${{ github.repository_owner }}/configs/argobot
+  IMAGE: ghcr.io/confighub/k8sbot
+  BUNDLE: ghcr.io/${{ github.repository_owner }}/configs/k8sbot
 
 jobs:
   # Build and push the semver image. Tag events only — a config-only change to
@@ -143,20 +143,20 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
-          mkdir -p out/argobot
-          cp manifests/*.yaml out/argobot/
+          mkdir -p out/k8sbot
+          cp manifests/*.yaml out/k8sbot/
 
           # Pin the floating :latest image ref to the resolved release version.
-          sed -i "s#image: ${IMAGE}:latest#image: ${IMAGE}:${VERSION}#g" out/argobot/*.yaml
+          sed -i "s#image: ${IMAGE}:latest#image: ${IMAGE}:${VERSION}#g" out/k8sbot/*.yaml
 
           # Fail loud if any unpinned image ref survived the substitution: an
           # unpinned bundle would silently defeat semver pinning (and the future
           # digest-comparison update check).
-          if grep -RnE "image: ${IMAGE}:latest" out/argobot/; then
+          if grep -RnE "image: ${IMAGE}:latest" out/k8sbot/; then
             echo "::error::config bundle still references ${IMAGE}:latest after pinning"
             exit 1
           fi
-          if ! grep -Rq "image: ${IMAGE}:${VERSION}" out/argobot/; then
+          if ! grep -Rq "image: ${IMAGE}:${VERSION}" out/k8sbot/; then
             echo "::error::config bundle does not reference ${IMAGE}:${VERSION}"
             exit 1
           fi
@@ -169,7 +169,7 @@ jobs:
           # gzip -n (no embedded name/timestamp), so identical content yields an
           # identical layer digest run to run.
           tar --sort=name --owner=0 --group=0 --numeric-owner \
-              --mtime='UTC 1970-01-01' -cf - -C out/argobot . | gzip -n > argobot.tar.gz
+              --mtime='UTC 1970-01-01' -cf - -C out/k8sbot . | gzip -n > k8sbot.tar.gz
 
           # The bundle floats: one moving :latest, no semver tag (semver lives on
           # the image, which the manifest inside the bundle is pinned to). Pin
@@ -180,6 +180,6 @@ jobs:
             "${BUNDLE}:latest" \
             --artifact-type application/vnd.confighub.config.bundle.v1 \
             --annotation "org.opencontainers.image.created=1970-01-01T00:00:00Z" \
-            "argobot.tar.gz:application/vnd.oci.image.layer.v1.tar+gzip"
+            "k8sbot.tar.gz:application/vnd.oci.image.layer.v1.tar+gzip"
 
           echo "Pushed ${BUNDLE}:latest"

@@ -19,8 +19,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/confighub/argobot/kube"
-	"github.com/confighub/argobot/sveltos"
+	"github.com/confighub/k8sbot/kube"
+	"github.com/confighub/k8sbot/sveltos"
 	"github.com/confighub/sdk/core/cubapi"
 	goclientnew "github.com/confighub/sdk/core/openapi/goclient-new"
 	"github.com/google/uuid"
@@ -128,7 +128,7 @@ type sveltosReporter struct {
 // Kubernetes client (in-cluster or kubeconfig) and informers over
 // HealthCheckReports and ClusterSummaries in every namespace (where Sveltos puts
 // a remote cluster's reports is not fixed), writing through hub, the ConfigHub
-// client argobot shares with its channel listener.
+// client k8sbot shares with its channel listener.
 func newSveltosReporter(cfg config, hub *cubapi.Client) (*sveltosReporter, error) {
 	dyn, err := kube.NewDynamicClient()
 	if err != nil {

@@ -14,14 +14,14 @@ import (
 	goclientnew "github.com/confighub/sdk/core/openapi/goclient-new"
 )
 
-// Event types argobot reacts to. ConfigHub's event vocabulary is open-ended and
-// owned by the server, so — like the API spec and the SDK — argobot names the
+// Event types k8sbot reacts to. ConfigHub's event vocabulary is open-ended and
+// owned by the server, so — like the API spec and the SDK — k8sbot names the
 // ones it cares about itself rather than relying on shared constants.
 const eventTypeReleasePublished = "release.published"
 
-// subscriptions is what argobot's Channel should subscribe to: the release
+// subscriptions is what k8sbot's Channel should subscribe to: the release
 // facts, for every Space and Target. It is the default an operator
-// creates the Channel with (`argobot --print-subscriptions`), and narrows on
+// creates the Channel with (`k8sbot --print-subscriptions`), and narrows on
 // the Channel by adding a SpaceID or TargetID, or more entries, with cub.
 func subscriptions() []goclientnew.EventSubscription {
 	return []goclientnew.EventSubscription{
@@ -30,9 +30,9 @@ func subscriptions() []goclientnew.EventSubscription {
 }
 
 // makeEventHandler returns the callback the Channel listener invokes for each
-// delivered event. argobot reacts by syncing the corresponding Argo CD
+// delivered event. k8sbot reacts by syncing the corresponding Argo CD
 // Applications — a reaction, not a command it was told to run. An event of a
-// type argobot does not react to, which a Channel subscribed more widely than
+// type k8sbot does not react to, which a Channel subscribed more widely than
 // subscriptions() would deliver, is logged and skipped, as is a fact it cannot
 // map to an Application.
 func makeEventHandler(syncer Syncer, cfg config) func(context.Context, *goclientnew.EventLog) {
@@ -41,7 +41,7 @@ func makeEventHandler(syncer Syncer, cfg config) func(context.Context, *goclient
 		switch event.EventType {
 		case eventTypeReleasePublished:
 		default:
-			log.Printf("[WARN] argobot: %s (%s) — not an event argobot reacts to; skipping. Narrow the channel's subscriptions.",
+			log.Printf("[WARN] k8sbot: %s (%s) — not an event k8sbot reacts to; skipping. Narrow the channel's subscriptions.",
 				event.EventType, where)
 			return
 		}
@@ -49,22 +49,22 @@ func makeEventHandler(syncer Syncer, cfg config) func(context.Context, *goclient
 		appNames := resolveAppNames(ctx, syncer, cfg, event)
 		if len(appNames) == 0 {
 			if slug := eventSpaceSlug(event); slug != "" {
-				log.Printf("[WARN] argobot: %s (%s) — no %s sync target found for space %q; skipping.",
+				log.Printf("[WARN] k8sbot: %s (%s) — no %s sync target found for space %q; skipping.",
 					event.EventType, where, cfg.Controller, slug)
 				return
 			}
-			log.Printf("[WARN] argobot: %s (%s) — no sync target resolved; skipping.", event.EventType, where)
+			log.Printf("[WARN] k8sbot: %s (%s) — no sync target resolved; skipping.", event.EventType, where)
 			return
 		}
 
 		for _, appName := range appNames {
-			log.Printf("[INFO] argobot: %s (%s) → syncing %s %q", event.EventType, where, cfg.Controller, appName)
+			log.Printf("[INFO] k8sbot: %s (%s) → syncing %s %q", event.EventType, where, cfg.Controller, appName)
 
 			if err := syncer.Sync(ctx, appName); err != nil {
-				log.Printf("[ERROR] argobot: sync of %q failed: %v", appName, err)
+				log.Printf("[ERROR] k8sbot: sync of %q failed: %v", appName, err)
 				continue
 			}
-			log.Printf("[INFO] argobot: sync of %q triggered", appName)
+			log.Printf("[INFO] k8sbot: sync of %q triggered", appName)
 		}
 	}
 }
@@ -102,7 +102,7 @@ func resolveAppNames(ctx context.Context, syncer Syncer, cfg config, event *gocl
 	apps, err := syncer.RepoURLs(ctx)
 	if err != nil {
 		// Without the list, fall back to the convention rather than drop the event.
-		log.Printf("[WARN] argobot: listing %s sync targets for space %q failed: %v; trying the one named %q",
+		log.Printf("[WARN] k8sbot: listing %s sync targets for space %q failed: %v; trying the one named %q",
 			cfg.Controller, slug, err, slug)
 		return []string{slug}
 	}

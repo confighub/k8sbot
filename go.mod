@@ -1,4 +1,4 @@
-module github.com/confighub/argobot
+module github.com/confighub/k8sbot
 
 go 1.25.0
 

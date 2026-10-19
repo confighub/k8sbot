@@ -7,10 +7,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/confighub/argobot/argo"
-	"github.com/confighub/argobot/flux"
-	"github.com/confighub/argobot/kube"
-	"github.com/confighub/argobot/sveltos"
+	"github.com/confighub/k8sbot/argo"
+	"github.com/confighub/k8sbot/flux"
+	"github.com/confighub/k8sbot/kube"
+	"github.com/confighub/k8sbot/sveltos"
 )
 
 // Controllers selectable via GITOPS_CONTROLLER.

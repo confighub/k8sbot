@@ -31,7 +31,7 @@ func TestResolveAppNames(t *testing.T) {
 
 	// Applications as the syncer lists them: name -> source repoURLs.
 	apps := map[string][]string{
-		"nonprod-argobot":  nil,
+		"nonprod-k8sbot":   nil,
 		"nonprod-argocd":   {"oci://gw/space/nonprod-argocd"},
 		"dev-1-apptique":   {"oci://gw/space/argo-apptique-dev-1"},
 		"app-dev":          {"oci://gw/space/app-dev"},
@@ -50,13 +50,13 @@ func TestResolveAppNames(t *testing.T) {
 	}{
 		{
 			name:  "release payload resolves via SpaceSlug",
-			entry: event(eventTypeReleasePublished, payload(map[string]any{"BundleBaseName": "e9786ad6-uuid", "SpaceSlug": "nonprod-argobot", "ReleaseNum": 5})),
-			want:  []string{"nonprod-argobot"},
+			entry: event(eventTypeReleasePublished, payload(map[string]any{"BundleBaseName": "e9786ad6-uuid", "SpaceSlug": "nonprod-k8sbot", "ReleaseNum": 5})),
+			want:  []string{"nonprod-k8sbot"},
 		},
 		{
 			name:  "ArgoApp override wins over payload",
 			cfg:   config{ArgoApp: "pinned-app"},
-			entry: event(eventTypeReleasePublished, payload(map[string]any{"SpaceSlug": "nonprod-argobot"})),
+			entry: event(eventTypeReleasePublished, payload(map[string]any{"SpaceSlug": "nonprod-k8sbot"})),
 			want:  []string{"pinned-app"},
 		},
 		{
@@ -108,9 +108,9 @@ func TestResolveAppNames(t *testing.T) {
 
 func TestResolveAppNamesListFailureFallsBackToName(t *testing.T) {
 	syncer := &fakeSyncer{listErr: errors.New("forbidden")}
-	entry := event(eventTypeReleasePublished, map[string]any{"SpaceSlug": "nonprod-argobot"})
+	entry := event(eventTypeReleasePublished, map[string]any{"SpaceSlug": "nonprod-k8sbot"})
 	got := resolveAppNames(context.Background(), syncer, config{}, entry)
-	if want := []string{"nonprod-argobot"}; !slices.Equal(got, want) {
+	if want := []string{"nonprod-k8sbot"}; !slices.Equal(got, want) {
 		t.Fatalf("resolveAppNames() = %v, want %v", got, want)
 	}
 }
@@ -191,8 +191,8 @@ func TestMakeEventHandler(t *testing.T) {
 	}
 
 	t.Run("resolved app is synced", func(t *testing.T) {
-		got, _ := handle(t, map[string][]string{"nonprod-argobot": nil}, "nonprod-argobot")
-		if want := []string{"nonprod-argobot"}; !slices.Equal(got, want) {
+		got, _ := handle(t, map[string][]string{"nonprod-k8sbot": nil}, "nonprod-k8sbot")
+		if want := []string{"nonprod-k8sbot"}; !slices.Equal(got, want) {
 			t.Fatalf("synced = %v, want %v", got, want)
 		}
 	})
@@ -284,7 +284,7 @@ func TestMakeEventHandler(t *testing.T) {
 		}
 	})
 
-	t.Run("an event type argobot does not react to is skipped, even with ArgoApp set", func(t *testing.T) {
+	t.Run("an event type k8sbot does not react to is skipped, even with ArgoApp set", func(t *testing.T) {
 		var buf bytes.Buffer
 		log.SetOutput(&buf)
 		t.Cleanup(func() { log.SetOutput(os.Stderr) })

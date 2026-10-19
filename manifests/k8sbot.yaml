@@ -1,42 +1,42 @@
 # Copyright (C) ConfigHub, Inc.
 # SPDX-License-Identifier: MIT
 #
-# Complete, self-documenting Kubernetes deployment for argobot.
+# Complete, self-documenting Kubernetes deployment for k8sbot.
 #
-# Every environment variable argobot supports appears in the Deployment's env
+# Every environment variable k8sbot supports appears in the Deployment's env
 # list below: those with a default are set to that default; those that must be
 # absent by default are commented out (uncomment and set to opt in).
 #
-# The Deployment reads its credentials from a Secret named argobot-secrets via
+# The Deployment reads its credentials from a Secret named k8sbot-secrets via
 # secretKeyRef. That Secret is deliberately NOT defined here: supply it out of
 # band (your secret store / External Secrets, or `kubectl create secret generic
-# argobot-secrets --from-literal=...`). Keeping credential material out of this
+# k8sbot-secrets --from-literal=...`). Keeping credential material out of this
 # manifest lets it float through GitOps without shipping or overwriting secrets.
 # Expected keys: CONFIGHUB_AUTH_PRIVATE_KEY (the service account's private JWK)
 # and — only when ARGO_SYNC_MODE=argocd — ARGOCD_AUTH_TOKEN.
 #
-# argobot runs in its own `argobot` namespace; its RBAC to sync Argo CD
+# k8sbot runs in its own `k8sbot` namespace; its RBAC to sync Argo CD
 # Applications lives in the `argocd` namespace (assumed to already exist — this
 # manifest does not create or manage it).
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: argobot
+  name: k8sbot
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: argobot
-  namespace: argobot
+  name: k8sbot
+  namespace: k8sbot
 ---
-# argobot's control-plane namespace. In the default kubernetes sync mode it
+# k8sbot's control-plane namespace. In the default kubernetes sync mode it
 # patches the Application's refresh annotation to force a sync, and it may manage
 # other Argo CD resources here — so it gets read+write across the Argo CD
 # namespace. This is a namespaced Role, so it grants nothing outside `argocd`.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: argobot-argocd
+  name: k8sbot-argocd
   namespace: argocd
 rules:
   - apiGroups: ["*"]
@@ -46,23 +46,23 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: argobot-argocd
+  name: k8sbot-argocd
   namespace: argocd
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: argobot-argocd
+  name: k8sbot-argocd
 subjects:
   - kind: ServiceAccount
-    name: argobot
-    namespace: argobot
+    name: k8sbot
+    namespace: k8sbot
 ---
 # Cluster-wide read-only access for the upcoming health/status reporting:
-# argobot will watch many resource kinds across all namespaces. Read across
+# k8sbot will watch many resource kinds across all namespaces. Read across
 # namespaces cannot be a Role (namespaced), so it is a ClusterRole bound
 # cluster-wide. get/list/watch only — no write outside `argocd`.
 #
-# Secrets are deliberately excluded: argobot reports on resource health and
+# Secrets are deliberately excluded: k8sbot reports on resource health and
 # never needs credential contents. RBAC has no "all except X", and Secrets live
 # in the core ("") API group, so the core group is enumerated WITHOUT secrets,
 # while every other group is wildcarded (no Secrets exist outside core). To
@@ -70,7 +70,7 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: argobot-read
+  name: k8sbot-read
 rules:
   # Core API group, minus Secrets.
   - apiGroups: [""]
@@ -107,47 +107,47 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: argobot-read
+  name: k8sbot-read
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: argobot-read
+  name: k8sbot-read
 subjects:
   - kind: ServiceAccount
-    name: argobot
-    namespace: argobot
+    name: k8sbot
+    namespace: k8sbot
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: argobot
-  namespace: argobot
+  name: k8sbot
+  namespace: k8sbot
   labels:
-    app: argobot
+    app: k8sbot
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: argobot
+      app: k8sbot
   template:
     metadata:
       labels:
-        app: argobot
+        app: k8sbot
     spec:
-      serviceAccountName: argobot
+      serviceAccountName: k8sbot
       containers:
-        - name: argobot
-          image: ghcr.io/confighub/argobot:latest
+        - name: k8sbot
+          image: ghcr.io/confighub/k8sbot:latest
           env:
             # ── ConfigHub connection (required) ──────────────────────────────
             - name: CONFIGHUB_URL
               value: "https://hub.confighub.com"
-            # The service account key argobot authenticates with: a private
+            # The service account key k8sbot authenticates with: a private
             # JWK, as `cub serviceaccount key add --generate` writes it.
             - name: CONFIGHUB_AUTH_PRIVATE_KEY
               valueFrom:
                 secretKeyRef:
-                  name: argobot-secrets
+                  name: k8sbot-secrets
                   key: CONFIGHUB_AUTH_PRIVATE_KEY
             # Only for a server whose CONFIGHUB_ASSERTION_AUDIENCE is not the default.
             # - name: CONFIGHUB_ASSERTION_AUDIENCE
@@ -156,8 +156,8 @@ spec:
             # ── Controller ───────────────────────────────────────────────────
             # "argocd" (default) drives Argo CD Applications. "sveltos" drives
             # Sveltos profiles and "flux" Flux OCIRepositories instead; each
-            # needs different RBAC, so deploy manifests/sveltos/argobot.yaml or
-            # manifests/flux/argobot.yaml for it.
+            # needs different RBAC, so deploy manifests/sveltos/k8sbot.yaml or
+            # manifests/flux/k8sbot.yaml for it.
             - name: GITOPS_CONTROLLER
               value: "argocd"
 
@@ -185,7 +185,7 @@ spec:
             # - name: ARGOCD_AUTH_TOKEN
             #   valueFrom:
             #     secretKeyRef:
-            #       name: argobot-secrets
+            #       name: k8sbot-secrets
             #       key: ARGOCD_AUTH_TOKEN
             # Application namespace passed to the REST sync (apps-in-any-namespace).
             # - name: ARGO_APP_NAMESPACE
@@ -196,15 +196,15 @@ spec:
             #   value: "false"
 
             # ── Channel ──────────────────────────────────────────────────────
-            # The ConfigHub Channel argobot claims and polls, as <space>/<slug>
+            # The ConfigHub Channel k8sbot claims and polls, as <space>/<slug>
             # or a UUID. Which events it delivers (and for which Spaces and
             # Targets) is the Channel's Subscriptions, set with cub, not here.
             - name: CONFIGHUB_CHANNEL
-              value: "my-cluster/argobot"
+              value: "my-cluster/k8sbot"
 
             # ── Cluster facts ────────────────────────────────────────────────
             # The ConfigHub Target that represents this cluster, as
-            # <space>/<slug> or a UUID. When set, argobot collects facts about
+            # <space>/<slug> or a UUID. When set, k8sbot collects facts about
             # the cluster (Kubernetes version, served resource types, storage
             # and ingress classes) at startup and stores them on the Target
             # under "Cluster.". Needs Edit on the Target.
@@ -218,7 +218,7 @@ spec:
             #   value: "my-app"
 
             # ── Live-status reporting ────────────────────────────────────────
-            # argobot also watches Argo CD Applications and reports each one's
+            # k8sbot also watches Argo CD Applications and reports each one's
             # sync/health back to the ConfigHub Release it is running. On by
             # default; set to "false" to disable. Needs Kubernetes access (the
             # ServiceAccount above already grants it).

@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/confighub/argobot/flux"
-	"github.com/confighub/argobot/kube"
+	"github.com/confighub/k8sbot/flux"
+	"github.com/confighub/k8sbot/kube"
 	"github.com/confighub/sdk/core/cubapi"
 	goclientnew "github.com/confighub/sdk/core/openapi/goclient-new"
 	"github.com/google/uuid"
@@ -60,7 +60,7 @@ type fluxObservation struct {
 //     (the Space's newest published Release, which latest resolves to, or the
 //     pinned digest) gets the failure, unless the cluster already runs or
 //     attempts it.
-//   - A Release argobot reported on for this repository that is neither run nor
+//   - A Release k8sbot reported on for this repository that is neither run nor
 //     attempted any more is marked replaced, so a stale status does not linger.
 //
 // Work is keyed by OCIRepository, not Kustomization: several Kustomizations can
@@ -187,7 +187,7 @@ func (r *fluxReporter) enqueue(obj any) {
 
 // report projects the OCIRepository named by key and the Kustomizations that
 // apply it onto the Releases of its Space, and writes each status that differs
-// from the one the Release has. Spaces argobot cannot see are ignored.
+// from the one the Release has. Spaces k8sbot cannot see are ignored.
 func (r *fluxReporter) report(ctx context.Context, key string) error {
 	obj, exists, err := r.sources.GetStore().GetByKey(key)
 	if err != nil {
@@ -208,7 +208,7 @@ func (r *fluxReporter) report(ctx context.Context, key string) error {
 	}
 	spaceID, known := r.getSpaceID(ctx, slug)
 	if !known {
-		// Slug did not resolve to a Space argobot can see -- not ours.
+		// Slug did not resolve to a Space k8sbot can see -- not ours.
 		return nil
 	}
 	releases, known, err := r.listReleases(ctx, spaceID)
@@ -433,7 +433,7 @@ func (r *fluxReporter) writeIfChanged(ctx context.Context, spaceID uuid.UUID, w 
 }
 
 // listReleases lists the Releases of a Space with their digests and live
-// status. A Space argobot cannot see is not known.
+// status. A Space k8sbot cannot see is not known.
 func (r *fluxReporter) listReleases(ctx context.Context, spaceID uuid.UUID) ([]goclientnew.Release, bool, error) {
 	selectFields := "ReleaseID,ReleaseNum,Published,ManifestDigest,LiveStatus,SpaceID,OrganizationID"
 	resp, err := r.api.ListExtendedReleasesWithResponse(ctx, spaceID,

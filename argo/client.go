@@ -3,7 +3,7 @@
 
 // Package argo is a thin client for the Argo CD REST API. It intentionally
 // depends only on the standard library rather than the (large) upstream Argo CD
-// module, since argobot only needs to trigger syncs.
+// module, since k8sbot only needs to trigger syncs.
 package argo
 
 import (
