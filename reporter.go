@@ -33,8 +33,11 @@ const (
 	liveStatusResync = 10 * time.Minute
 	// liveStatusMaxMessage caps the Message field at the length ConfigHub accepts.
 	liveStatusMaxMessage = 1024
-	// liveStatusReporter identifies k8sbot as the reporting client.
-	liveStatusReporter = "k8sbot"
+	// The Reporter k8sbot writes names k8sbot and the controller it read the
+	// status from, so a reader can tell an Argo CD status from a Flux one.
+	liveStatusReporterArgoCD  = "k8sbot/argocd"
+	liveStatusReporterFlux    = "k8sbot/flux"
+	liveStatusReporterSveltos = "k8sbot/sveltos"
 	// ociSpacePathSep precedes the deployment Space slug in an Application's OCI
 	// source repoURL: .../space/<space-slug>.
 	ociSpacePathSep = "/space/"
@@ -434,7 +437,7 @@ func projectStatus(u *unstructured.Unstructured) goclientnew.ReleaseLiveStatus {
 	}
 
 	status := livestatus.FromArgoCD(syncStatus, healthStatus, opPhase)
-	status.Reporter = liveStatusReporter
+	status.Reporter = liveStatusReporterArgoCD
 	status.DataSource = u.GetName()
 	status.Message = truncate(msg, liveStatusMaxMessage)
 	return status

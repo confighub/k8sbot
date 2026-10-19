@@ -30,8 +30,8 @@ func TestProjectStatus(t *testing.T) {
 
 	got := projectStatus(u)
 
-	if got.Reporter != liveStatusReporter {
-		t.Errorf("Reporter = %q, want %q", got.Reporter, liveStatusReporter)
+	if got.Reporter != liveStatusReporterArgoCD {
+		t.Errorf("Reporter = %q, want %q", got.Reporter, liveStatusReporterArgoCD)
 	}
 	if got.DataSource != "orders-prod" {
 		t.Errorf("DataSource = %q, want orders-prod", got.DataSource)
@@ -76,7 +76,7 @@ func TestProjectStatusMissingFields(t *testing.T) {
 	// as unknown rather than as anything a gate would accept.
 	u := app("fresh", map[string]any{})
 	got := projectStatus(u)
-	if got.Reporter != liveStatusReporter || got.DataSource != "fresh" {
+	if got.Reporter != liveStatusReporterArgoCD || got.DataSource != "fresh" {
 		t.Errorf("identity fields wrong: %+v", got)
 	}
 	if got.Sync != goclientnew.Unknown || got.Health != goclientnew.ReleaseLiveStatusHealthUnknown ||
@@ -102,7 +102,7 @@ func TestMergePatchObjectNullsEmptyFields(t *testing.T) {
 			t.Errorf("%s = %v (present %v), want null", field, value, present)
 		}
 	}
-	if got["Sync"] != "Synced" || got["Reporter"] != liveStatusReporter {
+	if got["Sync"] != "Synced" || got["Reporter"] != liveStatusReporterArgoCD {
 		t.Errorf("set fields wrong: %v", got)
 	}
 }

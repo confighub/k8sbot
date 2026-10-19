@@ -2,6 +2,10 @@
 
 A ConfigHub bot that syncs Argo CD applications, Sveltos profiles, or Flux OCI sources.
 
+> **Not authoritative yet.** Development happens in [confighub/argobot](https://github.com/confighub/argobot) until the switch-over; this repository is synced from it with `scripts/sync-from-argobot.sh`. Open PRs and issues there.
+
+k8sbot was called argobot until v0.2.0, when it drove only Argo CD. The old image `ghcr.io/confighub/argobot` and bundle `ghcr.io/confighub/configs/argobot` stay published but get no new releases.
+
 k8sbot listens on a ConfigHub Channel that subscribes to ConfigHub's event log. When ConfigHub records that a Release was published, k8sbot triggers a sync of the corresponding Argo CD Application (or, with `GITOPS_CONTROLLER=sveltos`, a redeploy of the Sveltos profile, see [Sveltos](#sveltos); or with `GITOPS_CONTROLLER=flux`, a reconciliation of the Flux OCIRepository, see [Flux](#flux)), so the change takes effect immediately instead of waiting for the controller's next reconciliation.
 
 This is a "bot" in the sense ConfigHub's Channels give the word: a process that claims a mailbox ConfigHub holds for it, rather than a Bridge worker. It is the pattern the Bridge is being replaced with.
@@ -33,6 +37,8 @@ Alongside reacting to events, k8sbot reports the other direction: it watches Arg
 k8sbot runs a Kubernetes informer over Argo CD Application CRs. Kubernetes watches cannot filter on what an Application deploys, so it watches every Application in the namespace and maps each to the ConfigHub Release it is running, in-process. An Application's OCI source (`.../space/<slug>`), or equivalently its name, names the deployment Space, and the revision Argo CD synced is the `ManifestDigest` of the Release it is running; the newest Release of the Space with that digest is the one. For each mapped Application, k8sbot writes the Release's `LiveStatus`: sync, health, and operation, normalized to ConfigHub's values with Argo CD's own words kept beside them, and a short message. An Application whose Space or Release does not resolve is ignored.
 
 k8sbot's access comes from grants on the Target its deployment Spaces release to: View and ViewChildren let it read the Spaces and their Releases, EditChildren lets it write their `LiveStatus`, and Edit lets it store [cluster facts](#cluster-facts) on the Target itself. `cub cluster up` grants all four to the service account k8sbot runs as.
+
+Statuses carry the Reporter `k8sbot/argocd`, `k8sbot/flux` or `k8sbot/sveltos`, naming the controller they were read from.
 
 Writes are coalesced per Application (a sync's burst of updates becomes one write) and deduplicated against the last projection (an idle Application produces no write). Reporting is on by default and needs Kubernetes access; set `CONFIGHUB_REPORT_LIVE_STATUS=false` to disable it, and if the Kubernetes client cannot be built the reporter is skipped with a warning rather than failing the bot.
 

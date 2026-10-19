@@ -217,7 +217,7 @@ func TestPlanFluxWritesApplyInProgress(t *testing.T) {
 		condition("Ready", "Unknown", "Progressing", "Reconciliation in progress"),
 		condition("Healthy", "Unknown", "Progressing", "Running health checks for revision "+rev(5)))
 	releases := publishedReleases(4, 5)
-	releases[0].LiveStatus = &goclientnew.ReleaseLiveStatus{Reporter: liveStatusReporter, DataSource: "Kustomization/flux-system/fx-app",
+	releases[0].LiveStatus = &goclientnew.ReleaseLiveStatus{Reporter: liveStatusReporterFlux, DataSource: "Kustomization/flux-system/fx-app",
 		Sync: goclientnew.Synced, Health: goclientnew.ReleaseLiveStatusHealthHealthy}
 	writes = writesByNum(planFluxWrites(source, []*unstructured.Unstructured{k}, releases))
 	expectStatus(t, "checking Release 5", writes[5],
@@ -263,7 +263,7 @@ func TestPlanFluxWritesFailedPull(t *testing.T) {
 func TestPlanFluxWritesMarksReplaced(t *testing.T) {
 	status := func(dataSource string, sync goclientnew.ReleaseLiveStatusSync, health goclientnew.ReleaseLiveStatusHealth,
 		op goclientnew.ReleaseLiveStatusOperation, message string) *goclientnew.ReleaseLiveStatus {
-		return &goclientnew.ReleaseLiveStatus{Reporter: liveStatusReporter, DataSource: dataSource,
+		return &goclientnew.ReleaseLiveStatus{Reporter: liveStatusReporterFlux, DataSource: dataSource,
 			Sync: sync, Health: health, Operation: op, Message: message}
 	}
 	healthy := func(dataSource string) *goclientnew.ReleaseLiveStatus {
@@ -306,7 +306,7 @@ func TestPlanFluxWritesMarksReplaced(t *testing.T) {
 		}
 		expectStatus(t, fmt.Sprintf("Release %d", c.n), got, goclientnew.OutOfSync, goclientnew.ReleaseLiveStatusHealthUnknown, c.op)
 		if got.Message != c.msg || got.ReporterOperation != c.reporterOp || got.DataSource != "Kustomization/flux-system/fx-app" ||
-			got.Reporter != liveStatusReporter {
+			got.Reporter != liveStatusReporterFlux {
 			t.Errorf("Release %d = %+v", c.n, got)
 		}
 	}
@@ -365,7 +365,7 @@ func TestPlanFluxWritesCombinesKustomizations(t *testing.T) {
 	if got.Message != "Kustomization/flux-system/a-broken: health check failed: [Deployment/fx/broken status: 'Failed']" {
 		t.Errorf("Message = %q", got.Message)
 	}
-	if got.DataSource != "Kustomization/flux-system/a-broken,Kustomization/flux-system/b-app" || got.Reporter != liveStatusReporter {
+	if got.DataSource != "Kustomization/flux-system/a-broken,Kustomization/flux-system/b-app" || got.Reporter != liveStatusReporterFlux {
 		t.Errorf("identity fields wrong: %+v", got)
 	}
 	if !got.ObservedAt.IsZero() {
