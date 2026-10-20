@@ -676,7 +676,7 @@ func projectSveltosStatus(resources []resourceHealth, featureStatus, dataSource 
 	}
 
 	status := fromSveltos(featureStatus, health)
-	status.Reporter = liveStatusReporterSveltos
+	status.Reporter = liveStatusReporter
 	status.DataSource = dataSource
 	status.Message = truncate(msg, liveStatusMaxMessage)
 	return status

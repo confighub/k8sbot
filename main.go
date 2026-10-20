@@ -1,14 +1,13 @@
 // Copyright (C) ConfigHub, Inc.
 // SPDX-License-Identifier: MIT
 
-// Command k8sbot is a ConfigHub bot that force-syncs the GitOps controller on a
-// Kubernetes cluster: Argo CD, Flux or Sveltos.
+// Command k8sbot is a ConfigHub bot that force-syncs Argo CD applications.
 //
 // It listens on a ConfigHub Channel: it claims the Channel as the service
-// account whose key it holds and polls it, syncing the corresponding Argo CD
-// Application, Flux source or Sveltos profile whenever ConfigHub delivers a
-// release the Channel subscribes to. This makes a deploy feel immediate instead
-// of waiting for the controller's next reconciliation.
+// account whose key it holds and polls it, force-syncing the corresponding Argo CD Application
+// whenever ConfigHub delivers a release the Channel subscribes to.
+// This makes a deploy feel immediate instead of waiting for Argo's next
+// reconciliation.
 //
 // k8sbot handles no commands yet, so a Channel it listens on declares none.
 // Its reaction (force-sync) is its own; the event only says the desired state

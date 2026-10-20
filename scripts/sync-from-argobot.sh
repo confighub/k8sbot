@@ -11,12 +11,13 @@
 #                    (argobot -> k8sbot in every file, manifests moved to
 #                    k8sbot.yaml). Each sync adds one commit whose parents are
 #                    the previous argobot-renamed and argobot's main.
-#   main             argobot-renamed plus k8sbot's own changes, such as the
-#                    README's notes and the LiveStatus Reporter.
+#   main             argobot-renamed plus the README's notes and this script,
+#                    so its code is argobot's, renamed. Releases are tagged
+#                    on main with argobot's version: k8sbot vN is argobot vN.
 #
 # A sync adds the next argobot-renamed commit and merges it into main. The
 # merge base is the previous argobot-renamed commit, so the merge conflicts only
-# where argobot changed lines that k8sbot also changed. The merge is left
+# where argobot changed the README's opening lines. The merge is left
 # uncommitted for review.
 #
 # Usage: scripts/sync-from-argobot.sh            (from the k8sbot checkout, on main)
@@ -91,3 +92,7 @@ echo "Mentions of argobot left (expected: the README's notes, this script):"
 git grep -n -i argobot || true
 echo
 echo "Then: git commit -m \"Sync from argobot $upstream\" && git push origin main argobot-renamed"
+release=$(git ls-remote --tags argobot | awk -v c="$(git rev-parse argobot/main)" '$1 == c && $2 ~ /refs\/tags\/v/ { sub("refs/tags/", "", $2); print $2 }')
+if [[ -n "$release" ]]; then
+  echo "argobot/main is release $release; after pushing: git tag $release main && git push origin $release"
+fi

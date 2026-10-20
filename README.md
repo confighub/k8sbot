@@ -38,8 +38,6 @@ k8sbot runs a Kubernetes informer over Argo CD Application CRs. Kubernetes watch
 
 k8sbot's access comes from grants on the Target its deployment Spaces release to: View and ViewChildren let it read the Spaces and their Releases, EditChildren lets it write their `LiveStatus`, and Edit lets it store [cluster facts](#cluster-facts) on the Target itself. `cub cluster up` grants all four to the service account k8sbot runs as.
 
-Statuses carry the Reporter `k8sbot/argocd`, `k8sbot/flux` or `k8sbot/sveltos`, naming the controller they were read from.
-
 Writes are coalesced per Application (a sync's burst of updates becomes one write) and deduplicated against the last projection (an idle Application produces no write). Reporting is on by default and needs Kubernetes access; set `CONFIGHUB_REPORT_LIVE_STATUS=false` to disable it, and if the Kubernetes client cannot be built the reporter is skipped with a warning rather than failing the bot.
 
 ### Cluster facts

@@ -301,7 +301,7 @@ func TestProjectSveltosStatus(t *testing.T) {
 	if got.Message != "Deployment/web: ready 3/4" {
 		t.Errorf("Message = %q", got.Message)
 	}
-	if got.Reporter != liveStatusReporterSveltos || got.DataSource != "release-test-mgmt" {
+	if got.Reporter != liveStatusReporter || got.DataSource != "release-test-mgmt" {
 		t.Errorf("identity fields wrong: %+v", got)
 	}
 	if !got.ObservedAt.IsZero() {

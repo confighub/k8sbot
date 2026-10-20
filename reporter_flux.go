@@ -314,7 +314,7 @@ func planFluxWrites(source *unstructured.Unstructured, kustomizations []*unstruc
 				continue
 			}
 			dataSource := fluxDataSource(ls.DataSource)
-			if ls.Reporter != liveStatusReporterFlux ||
+			if ls.Reporter != liveStatusReporter ||
 				!slices.ContainsFunc(strings.Split(dataSource, ","), func(s string) bool { return owners[s] }) {
 				continue
 			}
@@ -348,7 +348,7 @@ const fluxReplacedMessage = "Replaced by release"
 // message, since the Release's status is the only record of it.
 func fluxReplacedStatus(was goclientnew.ReleaseLiveStatus, replacement int64) goclientnew.ReleaseLiveStatus {
 	status := fromFluxReplaced()
-	status.Reporter = liveStatusReporterFlux
+	status.Reporter = liveStatusReporter
 	status.DataSource = was.DataSource
 	status.Message = fmt.Sprintf("%s %d", fluxReplacedMessage, replacement)
 	if was.Operation == goclientnew.ReleaseLiveStatusOperationFailed {
@@ -615,7 +615,7 @@ func projectFluxStatus(observations []fluxObservation) goclientnew.ReleaseLiveSt
 		}
 	}
 
-	status.Reporter = liveStatusReporterFlux
+	status.Reporter = liveStatusReporter
 	status.DataSource = truncate(strings.Join(sources, ","), 253)
 	status.Message = truncate(msg, liveStatusMaxMessage)
 	return status
