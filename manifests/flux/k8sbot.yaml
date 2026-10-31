@@ -6,7 +6,7 @@
 # is where the OCIRepositories and Kustomizations live.
 #
 # Every environment variable k8sbot reads under Flux appears in the
-# Deployment's env list below. The ARGO_*/ARGOCD_* variables are Argo CD only and
+# Deployment's env list below. The ARGO_* variables are Argo CD only and
 # are ignored here.
 #
 # The Deployment reads its credentials from a Secret named k8sbot-secrets via
@@ -18,8 +18,11 @@
 # k8sbot needs Flux 2.6 or later, which serves OCIRepository as
 # source.toolkit.fluxcd.io/v1.
 #
-# The release workflow publishes only manifests/*.yaml as the config bundle, so
-# this variant is not part of ghcr.io/confighub/configs/k8sbot.
+# CONFIGHUB_CHANNEL and CONFIGHUB_TARGET are ConfigHub placeholders: set them
+# for the cluster before applying, as a ConfigHub variant of this base does.
+#
+# The image is the k8sbot release this manifest ships with. Each k8sbot image
+# carries it as /manifests/flux.yaml.
 #
 # A Space is deployed by an OCIRepository pulling it from the ConfigHub OCI
 # gateway, and a Kustomization applying it. For example:
@@ -62,6 +65,11 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: k8sbot
+  # k8sbot meets the Pod Security Standards restricted level.
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -171,9 +179,18 @@ spec:
         app: k8sbot
     spec:
       serviceAccountName: k8sbot
+      # Meets the Pod Security Standards "restricted" level. The image runs as
+      # 1000:3000.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 3000
+        fsGroup: 2000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: k8sbot
-          image: ghcr.io/confighub/k8sbot:latest
+          image: ghcr.io/confighub/k8sbot:v0.2.8
           env:
             # ── ConfigHub connection (required) ──────────────────────────────
             - name: CONFIGHUB_URL
@@ -205,16 +222,16 @@ spec:
             # or a UUID. Which events it delivers (and for which Spaces and
             # Targets) is the Channel's Subscriptions, set with cub, not here.
             - name: CONFIGHUB_CHANNEL
-              value: "my-cluster/k8sbot"
+              value: confighubplaceholder
 
             # ── Cluster facts ────────────────────────────────────────────────
             # The ConfigHub Target that represents this cluster, as
             # <space>/<slug> or a UUID. When set, k8sbot collects facts about
             # the cluster (Kubernetes version, served resource types, storage
             # and ingress classes) at startup and stores them on the Target
-            # under "Cluster.". Needs Edit on the Target.
-            # - name: CONFIGHUB_TARGET
-            #   value: "my-cluster/target"
+            # under "Cluster.". Needs Edit on the Target. Empty stores none.
+            - name: CONFIGHUB_TARGET
+              value: confighubplaceholder
 
             # ── Live-status reporting ────────────────────────────────────────
             # k8sbot watches Kustomizations and writes each Release's
@@ -230,6 +247,7 @@ spec:
               memory: 128Mi
           securityContext:
             allowPrivilegeEscalation: false
+            privileged: false
             readOnlyRootFilesystem: true
             runAsNonRoot: true
             capabilities:

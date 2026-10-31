@@ -12,8 +12,13 @@
 # band (your secret store / External Secrets, or `kubectl create secret generic
 # k8sbot-secrets --from-literal=...`). Keeping credential material out of this
 # manifest lets it float through GitOps without shipping or overwriting secrets.
-# Expected keys: CONFIGHUB_AUTH_PRIVATE_KEY (the service account's private JWK)
-# and — only when ARGO_SYNC_MODE=argocd — ARGOCD_AUTH_TOKEN.
+# Expected key: CONFIGHUB_AUTH_PRIVATE_KEY (the service account's private JWK).
+#
+# CONFIGHUB_CHANNEL and CONFIGHUB_TARGET are ConfigHub placeholders: set them
+# for the cluster before applying, as a ConfigHub variant of this base does.
+#
+# The image is the k8sbot release this manifest ships with. Each k8sbot image
+# carries it as /manifests/argocd.yaml.
 #
 # k8sbot runs in its own `k8sbot` namespace; its RBAC to sync Argo CD
 # Applications lives in the `argocd` namespace (assumed to already exist — this
@@ -22,6 +27,11 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: k8sbot
+  # k8sbot meets the Pod Security Standards restricted level.
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -29,8 +39,8 @@ metadata:
   name: k8sbot
   namespace: k8sbot
 ---
-# k8sbot's control-plane namespace. In the default kubernetes sync mode it
-# patches the Application's refresh annotation to force a sync, and it may manage
+# k8sbot's control-plane namespace. It patches the Application's refresh
+# annotation to force a sync, and it may manage
 # other Argo CD resources here — so it gets read+write across the Argo CD
 # namespace. This is a namespaced Role, so it grants nothing outside `argocd`.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -135,9 +145,18 @@ spec:
         app: k8sbot
     spec:
       serviceAccountName: k8sbot
+      # Meets the Pod Security Standards "restricted" level. The image runs as
+      # 1000:3000.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 3000
+        fsGroup: 2000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: k8sbot
-          image: ghcr.io/confighub/k8sbot:latest
+          image: ghcr.io/confighub/k8sbot:v0.2.8
           env:
             # ── ConfigHub connection (required) ──────────────────────────────
             - name: CONFIGHUB_URL
@@ -161,14 +180,9 @@ spec:
             - name: GITOPS_CONTROLLER
               value: "argocd"
 
-            # ── Sync mode ────────────────────────────────────────────────────
-            # "kubernetes" (default) patches the Application's refresh annotation
-            # via the Kubernetes API (deploys only if auto-sync is enabled);
-            # "argocd" calls the Argo CD REST API (deploys unconditionally).
-            - name: ARGO_SYNC_MODE
-              value: "kubernetes"
-
-            # ── Kubernetes sync mode ─────────────────────────────────────────
+            # ── Argo CD sync ─────────────────────────────────────────────────
+            # k8sbot patches the Application's refresh annotation via the
+            # Kubernetes API (deploys only if auto-sync is enabled).
             # Namespace holding the Argo CD Application resources.
             - name: ARGO_NAMESPACE
               value: "argocd"
@@ -177,39 +191,21 @@ spec:
             - name: ARGO_REFRESH_TYPE
               value: "hard"
 
-            # ── Argo CD REST sync mode (only when ARGO_SYNC_MODE=argocd) ──────
-            # - name: ARGOCD_SERVER
-            #   value: "https://argocd.example.com"
-            # - name: ARGOCD_INSECURE
-            #   value: "false"
-            # - name: ARGOCD_AUTH_TOKEN
-            #   valueFrom:
-            #     secretKeyRef:
-            #       name: k8sbot-secrets
-            #       key: ARGOCD_AUTH_TOKEN
-            # Application namespace passed to the REST sync (apps-in-any-namespace).
-            # - name: ARGO_APP_NAMESPACE
-            #   value: ""
-            # - name: ARGO_PRUNE
-            #   value: "false"
-            # - name: ARGO_FORCE
-            #   value: "false"
-
             # ── Channel ──────────────────────────────────────────────────────
             # The ConfigHub Channel k8sbot claims and polls, as <space>/<slug>
             # or a UUID. Which events it delivers (and for which Spaces and
             # Targets) is the Channel's Subscriptions, set with cub, not here.
             - name: CONFIGHUB_CHANNEL
-              value: "my-cluster/k8sbot"
+              value: confighubplaceholder
 
             # ── Cluster facts ────────────────────────────────────────────────
             # The ConfigHub Target that represents this cluster, as
             # <space>/<slug> or a UUID. When set, k8sbot collects facts about
             # the cluster (Kubernetes version, served resource types, storage
             # and ingress classes) at startup and stores them on the Target
-            # under "Cluster.". Needs Edit on the Target.
-            # - name: CONFIGHUB_TARGET
-            #   value: "my-cluster/target"
+            # under "Cluster.". Needs Edit on the Target. Empty stores none.
+            - name: CONFIGHUB_TARGET
+              value: confighubplaceholder
 
             # ── Application resolution ───────────────────────────────────────
             # Pin one Application for every event. Absent = resolve from the
@@ -232,6 +228,7 @@ spec:
               memory: 128Mi
           securityContext:
             allowPrivilegeEscalation: false
+            privileged: false
             readOnlyRootFilesystem: true
             runAsNonRoot: true
             capabilities:

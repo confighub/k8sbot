@@ -15,14 +15,9 @@ k8sbot claims a ConfigHub Channel and polls it:
 - On a delivered event it resolves which Argo CD Application to sync (see below) and triggers a sync. The reaction is k8sbot's own; the event only says the desired state for a (Space, Target) changed. An event of another type, which a Channel subscribed more widely would deliver, is logged and skipped.
 - The Channel bookmarks how far it has read, so a restart resumes where it left off without k8sbot keeping any local state. A new Channel starts at the tail of the log.
 
-### Sync modes
+Forcing a sync. k8sbot patches the Application's `argocd.argoproj.io/refresh` annotation through the Kubernetes API. Argo re-compares the Application against its source (a **hard** refresh re-resolves the source, including an OCI tag→digest, so Argo picks up a freshly published bundle rather than replaying a cached digest) and then, **if the Application has auto-sync enabled, deploys**. If auto-sync is off, k8sbot's refresh does not deploy — auto-sync is the deploy gate. Credentials are the pod's ServiceAccount; there is no Argo CD API token to set up.
 
-`ARGO_SYNC_MODE` selects how k8sbot triggers the sync:
-
-- **`kubernetes`** (default) — k8sbot patches the Application's `argocd.argoproj.io/refresh` annotation through the Kubernetes API. Argo re-compares the Application against its source (a **hard** refresh re-resolves the source, including an OCI tag→digest, so Argo picks up a freshly published bundle rather than replaying a cached digest) and then, **if the Application has auto-sync enabled, deploys**. If auto-sync is off, k8sbot's refresh does not deploy — auto-sync is the deploy gate. Credentials are the pod's ServiceAccount; there is no Argo CD API token to set up.
-- **`argocd`** — k8sbot calls the Argo CD REST `/api/v1/applications/{name}/sync` endpoint. This deploys **regardless** of the Application's auto-sync setting. It needs an Argo CD API base URL and bearer token, which are k8sbot's own authority, supplied by environment and never brokered through ConfigHub.
-
-Resolving the Application. When `ARGO_APP` is set, it is the single Application every matching event syncs — the simplest deployment. When it is not set, the event's Space slug is resolved to every Application in `ARGO_NAMESPACE` whose OCI source names that Space — a `spec.source.repoURL` or any `spec.sources[].repoURL` ending in `/space/<slug>` — plus the Application named `<slug>`, by the app-name == space-slug convention. Each Application is synced once. Matching by source finds Applications that kept the name Argo CD gave them when `cub argo` moved them onto ConfigHub (for example Application `dev-1-apptique` reading `oci://gw/space/argo-apptique-dev-1`). If no Application is found, k8sbot logs a warning naming the slug and skips the event. k8sbot lists the Applications on each event (`list` on Application resources in `kubernetes` mode; `GET /api/v1/applications`, scoped to `ARGO_APP_NAMESPACE` when set, in `argocd` mode); if the list fails it logs a warning and falls back to the Application named `<slug>`.
+Resolving the Application. When `ARGO_APP` is set, it is the single Application every matching event syncs — the simplest deployment. When it is not set, the event's Space slug is resolved to every Application in `ARGO_NAMESPACE` whose OCI source names that Space — a `spec.source.repoURL` or any `spec.sources[].repoURL` ending in `/space/<slug>` — plus the Application named `<slug>`, by the app-name == space-slug convention. Each Application is synced once. Matching by source finds Applications that kept the name Argo CD gave them when `cub argo` moved them onto ConfigHub (for example Application `dev-1-apptique` reading `oci://gw/space/argo-apptique-dev-1`). If no Application is found, k8sbot logs a warning naming the slug and skips the event. k8sbot lists the Applications in `ARGO_NAMESPACE` through the Kubernetes API on each event; if the list fails it logs a warning and falls back to the Application named `<slug>`.
 
 Correctness belongs to Argo CD: it reconciles from its source regardless, so a missed or failed sync only loses immediacy, not correctness.
 
@@ -44,7 +39,7 @@ Collecting needs Kubernetes discovery and `list` on CustomResourceDefinitions, S
 
 ### Sveltos
 
-`GITOPS_CONTROLLER=sveltos` makes k8sbot drive [Sveltos](https://projectsveltos.github.io/sveltos/) instead of Argo CD. Event handling, the Channel and the ConfigHub calls are the same; the two Argo-facing parts change. The `ARGO_*`/`ARGOCD_*` variables are Argo CD only and are ignored.
+`GITOPS_CONTROLLER=sveltos` makes k8sbot drive [Sveltos](https://projectsveltos.github.io/sveltos/) instead of Argo CD. Event handling, the Channel and the ConfigHub calls are the same; the two Argo-facing parts change. The `ARGO_*` variables are Argo CD only and are ignored.
 
 **Forcing a sync.** k8sbot writes a new value (the current time) to the `profile.projectsveltos.io/redeploy` annotation of each profile that deploys the event's Space. Any change of value redeploys every ClusterSummary the profile manages, which fetches its `remoteURL` again, so a new Release reaches the cluster within seconds instead of at the profile's next poll; a redeploy with no new Release writes no objects. Unlike Argo's refresh annotation, Sveltos leaves the annotation in place, which is why each sync writes a new value. Sveltos ignores it for profiles with `syncMode: OneTime`. The profiles are the ClusterProfiles (cluster-scoped, named by their name) and Profiles (named `<namespace>/<name>`) whose `spec.policyRefs[].remoteURL.url` or `spec.kustomizationRefs[].remoteURL.url` names the Space — Sveltos keeps the tag in the URL (`.../space/<slug>:latest`), and a trailing `:<tag>` or `@<digest>` is ignored — plus the ClusterProfile named `<slug>`. On a ClusterProfile the annotation redeploys every cluster the profile selects. Under `cub cluster up` the child ClusterProfiles are applied by a root profile; Sveltos keeps k8sbot's annotation when the root reapplies a child.
 
@@ -53,11 +48,11 @@ Collecting needs Kubernetes discovery and `list` on CustomResourceDefinitions, S
 - **Coverage.** The HealthCheck must select at least one object of every Unit, or k8sbot can't tell which revision of an unselected Unit is running and reports nothing for that Space. Reports also have a size limit (a Kubernetes object is capped at about 1.5 MiB): for big Releases, select one small object per Unit rather than everything, or split the check.
 - **One report per cluster, one `LiveStatus` per Release.** With one profile per variant per cluster, as `cub cluster up` sets up, these coincide. A Release that several clusters run is written by each cluster's report in turn.
 
-`manifests/sveltos/k8sbot.yaml` is the Sveltos deployment, for the Sveltos management cluster: a `ClusterRole` to `patch` ClusterProfiles and Profiles, the read-only `ClusterRole` extended to the `config.projectsveltos.io` and `lib.projectsveltos.io` API groups, a `HealthCheck` and `ClusterHealthCheck` that collect every object carrying `confighub.com/origin` across common kinds (extend `resourceSelectors` to cover the kinds your Releases contain), and the Deployment with `GITOPS_CONTROLLER=sveltos`. It is not part of the published config bundle.
+`manifests/sveltos/k8sbot.yaml` is the Sveltos deployment, for the Sveltos management cluster: a `ClusterRole` to `patch` ClusterProfiles and Profiles, the read-only `ClusterRole` extended to the `config.projectsveltos.io` and `lib.projectsveltos.io` API groups, a `HealthCheck` and `ClusterHealthCheck` that collect every object carrying `confighub.com/origin` across common kinds (extend `resourceSelectors` to cover the kinds your Releases contain), and the Deployment with `GITOPS_CONTROLLER=sveltos`.
 
 ### Flux
 
-`GITOPS_CONTROLLER=flux` makes k8sbot drive [Flux](https://fluxcd.io/) (2.6 or later) instead of Argo CD. As with Sveltos, the Channel, event handling and the ConfigHub calls are the same, and the `ARGO_*`/`ARGOCD_*` variables are ignored. A Space is deployed by an `OCIRepository` pulling `oci://<gateway>/space/<slug>` with `ref.tag: latest` (the gateway serves only `latest` or a digest; `ref.semver` won't resolve) and a pull secret whose username is `token` and password a ConfigHub token, plus a `Kustomization` applying it. No `layerSelector` is needed: a Release is a single tar+gzip layer, which Flux extracts by default.
+`GITOPS_CONTROLLER=flux` makes k8sbot drive [Flux](https://fluxcd.io/) (2.6 or later) instead of Argo CD. As with Sveltos, the Channel, event handling and the ConfigHub calls are the same, and the `ARGO_*` variables are ignored. A Space is deployed by an `OCIRepository` pulling `oci://<gateway>/space/<slug>` with `ref.tag: latest` (the gateway serves only `latest` or a digest; `ref.semver` won't resolve) and a pull secret whose username is `token` and password a ConfigHub token, plus a `Kustomization` applying it. No `layerSelector` is needed: a Release is a single tar+gzip layer, which Flux extracts by default.
 
 **Forcing a sync.** k8sbot writes a new value (the current time) to the `reconcile.fluxcd.io/requestedAt` annotation of each OCIRepository that pulls the event's Space. source-controller resolves the tag again; if it points at a new Release, it stores the new artifact and kustomize-controller reconciles every Kustomization that applies the repository, so the Release reaches the cluster within seconds instead of at the repository's next `interval`. Like Sveltos, Flux leaves the annotation in place, which is why each sync writes a new value. The repositories are the OCIRepositories (named `<namespace>/<name>`) whose `spec.url` names the Space, plus the one named `<slug>`. If listing them fails, k8sbot tries `<slug>` in `FLUX_NAMESPACE`.
 
@@ -73,7 +68,7 @@ The Kustomizations that apply one repository and speak about the same Release ar
 - **Health checks.** Set `wait: true` (or `healthChecks`) on the Kustomization. Without one, Flux never judges the health of what it applied, and k8sbot reports health `Unknown`.
 - **One `LiveStatus` per Release.** Two OCIRepositories pulling the same Space, or one Release that several clusters run, write the same Release in turn. Clusters whose Kustomizations share a namespace and name, deploying one Space, would mark each other's Releases replaced.
 
-`manifests/flux/k8sbot.yaml` is the Flux deployment: a `ClusterRole` to `patch` OCIRepositories, the read-only `ClusterRole` extended to the `source.toolkit.fluxcd.io` and `kustomize.toolkit.fluxcd.io` API groups, the Deployment with `GITOPS_CONTROLLER=flux`, and an example OCIRepository and Kustomization in its comments. It is not part of the published config bundle.
+`manifests/flux/k8sbot.yaml` is the Flux deployment: a `ClusterRole` to `patch` OCIRepositories, the read-only `ClusterRole` extended to the `source.toolkit.fluxcd.io` and `kustomize.toolkit.fluxcd.io` API groups, the Deployment with `GITOPS_CONTROLLER=flux`, and an example OCIRepository and Kustomization in its comments.
 
 ## Configuration
 
@@ -86,23 +81,18 @@ All configuration is via environment variables:
 | `CONFIGHUB_CHANNEL` | yes | The Channel k8sbot claims and polls, as `<space>/<slug>` or a UUID |
 | `CONFIGHUB_TARGET` | no | The Target that represents the cluster, as `<space>/<slug>` or a UUID. When set, k8sbot stores facts about the cluster on it at startup; see [Cluster facts](#cluster-facts). Needs Edit on the Target. |
 | `CONFIGHUB_ASSERTION_AUDIENCE` | no | Only for a ConfigHub server that sets `CONFIGHUB_ASSERTION_AUDIENCE` to something other than its default; must match it. |
-| `GITOPS_CONTROLLER` | no | `argocd` (default), `sveltos` or `flux`. See [Sveltos](#sveltos) and [Flux](#flux). Every `ARGO_*`/`ARGOCD_*` variable below applies to `argocd` only. |
+| `GITOPS_CONTROLLER` | no | `argocd` (default), `sveltos` or `flux`. See [Sveltos](#sveltos) and [Flux](#flux). Every `ARGO_*` variable below applies to `argocd` only. |
 | `FLUX_NAMESPACE` | no | _flux only._ Namespace of the OCIRepository named after a Space, tried when listing OCIRepositories fails. Defaults to `flux-system`. |
-| `ARGO_SYNC_MODE` | no | `kubernetes` (default) or `argocd`. See [Sync modes](#sync-modes). |
-| `ARGO_NAMESPACE` | no | _kubernetes mode._ Namespace holding the Argo CD Application resources. Defaults to `argocd`. |
-| `ARGO_REFRESH_TYPE` | no | _kubernetes mode._ `hard` (default) or `normal`. |
-| `ARGOCD_SERVER` | argocd mode | Argo CD API base URL, e.g. `https://argocd.example.com` |
-| `ARGOCD_AUTH_TOKEN` | argocd mode | Argo CD API bearer token |
-| `ARGOCD_INSECURE` | no | _argocd mode._ `true` to skip TLS verification (self-signed Argo CD) |
+| `ARGO_NAMESPACE` | no | Namespace holding the Argo CD Application resources. Defaults to `argocd`. |
+| `ARGO_REFRESH_TYPE` | no | `hard` (default) or `normal`. |
 | `ARGO_APP` | no | The single Argo CD Application every matching event syncs. If unset, the event's Space slug resolves to every Application whose OCI source names that Space, plus the one named after it. |
-| `ARGO_APP_NAMESPACE` | no | _argocd mode._ Argo CD Application namespace passed to the REST sync request (apps-in-any-namespace). |
-| `ARGO_PRUNE` | no | _argocd mode._ `true` to prune on sync. |
-| `ARGO_FORCE` | no | _argocd mode._ `true` to use Argo's force strategy on sync. |
 | `CONFIGHUB_REPORT_LIVE_STATUS` | no | `false` to disable live-status reporting. On by default; see [Live-status reporting](#live-status-reporting). Needs Kubernetes access. |
 
-When `GITOPS_CONTROLLER` is unset, k8sbot drives Argo CD. When `ARGO_SYNC_MODE` is unset, k8sbot runs in `kubernetes` mode and needs no Argo CD credentials; it uses the in-cluster ServiceAccount (or a local kubeconfig when run out of cluster). Set `ARGO_SYNC_MODE=argocd` to use the REST API instead, which then requires `ARGOCD_SERVER` and `ARGOCD_AUTH_TOKEN`.
+An empty variable is the same as an unset one. `k8sbot docgen env` prints these variables as a JSON Schema, with each one's description, default and allowed values; the installer package validates k8sbot's environment against it.
 
-Which events k8sbot receives is not configured here. It is the Channel's `Subscriptions`, set with `cub channel create --subscriptions` or `cub channel update`. The variables an earlier k8sbot read as a worker (`CONFIGHUB_WORKER_ID`, `CONFIGHUB_WORKER_SECRET`, and the subscription scope `CONFIGHUB_SUBSCRIPTION_NAME`, `CONFIGHUB_EVENT_SPACE_ID`, `CONFIGHUB_EVENT_TARGET_ID`) are ignored with a warning.
+When `GITOPS_CONTROLLER` is unset, k8sbot drives Argo CD. It needs no Argo CD credentials: it uses the in-cluster ServiceAccount (or a local kubeconfig when run out of cluster).
+
+Which events k8sbot receives is not configured here. It is the Channel's `Subscriptions`, set with `cub channel create --subscriptions` or `cub channel update`. The variables an earlier k8sbot read as a worker (`CONFIGHUB_WORKER_ID`, `CONFIGHUB_WORKER_SECRET`, and the subscription scope `CONFIGHUB_SUBSCRIPTION_NAME`, `CONFIGHUB_EVENT_SPACE_ID`, `CONFIGHUB_EVENT_TARGET_ID`) are ignored with a warning, as are those of the retired Argo CD REST sync mode (`ARGO_SYNC_MODE`, `ARGOCD_SERVER`, `ARGOCD_AUTH_TOKEN`, `ARGOCD_INSECURE`, `ARGO_APP_NAMESPACE`, `ARGO_PRUNE`, `ARGO_FORCE`). k8sbot now always syncs through the Kubernetes API, which deploys only when the Application has auto-sync enabled.
 
 ## Setup
 
@@ -132,7 +122,7 @@ k8sbot --print-subscriptions | cub channel create k8sbot --space my-cluster \
 
 A Channel created this way subscribes to deploys on every Space and Target. To react only to one cluster's deploys, scope the subscription to its Target with `cub channel update k8sbot --space my-cluster --subscriptions -`, giving the same JSON with a `TargetID`.
 
-Then run k8sbot with the key, naming the Channel and the cluster's Target. In the default `kubernetes` mode it uses the ambient Kubernetes credentials (in-cluster ServiceAccount, or your local kubeconfig) — no Argo CD token:
+Then run k8sbot with the key, naming the Channel and the cluster's Target. It uses the ambient Kubernetes credentials (in-cluster ServiceAccount, or your local kubeconfig) — no Argo CD token:
 
 ```sh
 CONFIGHUB_URL=https://hub.confighub.com \
@@ -144,39 +134,25 @@ ARGO_APP=my-app \
 k8sbot
 ```
 
-To use the Argo CD REST API instead (deploys regardless of auto-sync), set `ARGO_SYNC_MODE=argocd` and supply its credentials:
-
-```sh
-CONFIGHUB_URL=https://hub.confighub.com \
-CONFIGHUB_AUTH_PRIVATE_KEY="$(cat ~/.confighub/keys/k8sbot-my-cluster.jwk)" \
-CONFIGHUB_CHANNEL=my-cluster/k8sbot \
-CONFIGHUB_TARGET=my-cluster/target \
-ARGO_SYNC_MODE=argocd \
-ARGOCD_SERVER=https://argocd.example.com ARGOCD_AUTH_TOKEN=... \
-ARGO_APP=my-app \
-k8sbot
-```
-
 A `cub unit apply` or a `cub release publish` for a (Space, Target) the Channel subscribes to now emits an event that k8sbot receives and syncs on. `cub channel get k8sbot --space my-cluster` shows whether k8sbot holds the lease and when it last polled.
 
 (Exact `cub` flags may vary by CLI version; `cub --help`.)
 
 ## Deploy
 
-k8sbot runs in the cluster alongside Argo CD. `manifests/k8sbot.yaml` is a complete, self-documenting deployment: a Namespace, a ServiceAccount, its RBAC (see below), and a Deployment whose `env` list carries **every** supported variable — defaults filled in, and the ones that must be absent by default commented out. The Deployment reads its credentials from a Secret named `k8sbot-secrets` via `secretKeyRef`; that Secret is intentionally **not** part of the manifest — supply it out of band (secret store / External Secrets, or `kubectl create secret generic k8sbot-secrets --from-literal=...`) so the bundle never ships or overwrites credential material. Expected keys: `CONFIGHUB_AUTH_PRIVATE_KEY` (the private JWK) and (argocd mode only) `ARGOCD_AUTH_TOKEN`.
+k8sbot runs in the cluster alongside Argo CD. `manifests/k8sbot.yaml` is a complete, self-documenting deployment: a Namespace, a ServiceAccount, its RBAC (see below), and a Deployment whose `env` list carries **every** supported variable — defaults filled in, and the ones that must be absent by default commented out. The Deployment reads its credentials from a Secret named `k8sbot-secrets` via `secretKeyRef`; that Secret is intentionally **not** part of the manifest — supply it out of band (secret store / External Secrets, or `kubectl create secret generic k8sbot-secrets --from-literal=...`) so the manifest never ships or overwrites credential material. Its only key is `CONFIGHUB_AUTH_PRIVATE_KEY` (the private JWK).
 
 RBAC comes in two parts. A **`Role`/`RoleBinding` in the Argo CD namespace** (`argocd` by default) grants read+write there — k8sbot patches an Application's refresh annotation to force a sync, and may manage other Argo CD resources; being namespaced, it grants nothing outside `argocd`. A **`ClusterRole`/`ClusterRoleBinding`** grants cluster-wide **read-only** (`get`/`list`/`watch`) for health/status reporting across all namespaces — deliberately **excluding Secrets** (the core API group is enumerated without `secrets`; other groups are wildcarded, and Secrets exist only in core). Add a CRD's API group to that second rule to extend coverage. The Namespace, ServiceAccount, and Deployment are k8sbot's own — adjust the namespaces to match your cluster.
 
 For Sveltos, deploy `manifests/sveltos/k8sbot.yaml` instead; see [Sveltos](#sveltos). For Flux, deploy `manifests/flux/k8sbot.yaml`; see [Flux](#flux).
 
-### Config bundle
+### Pinned to a release
 
-`.github/workflows/release.yml` packages `manifests/` into an OCI bundle and pushes it to `ghcr.io/confighub/configs/k8sbot:latest`. The bundle **floats** — a single moving `:latest` — but each cut pins a concrete released image: the committed manifest carries `k8sbot:latest`, and the workflow substitutes it with the current released version (resolved from git tags) before publishing, failing the build if the pin does not take. Load it into ConfigHub as a component base:
+Each manifest runs the k8sbot release it ships with, never `latest`, and leaves `CONFIGHUB_CHANNEL` and `CONFIGHUB_TARGET` as `confighubplaceholder`, for each cluster to set. Each k8sbot image carries the three of them, as `/manifests/argocd.yaml`, `/manifests/flux.yaml` and `/manifests/sveltos.yaml`, in the image's last layer. `cub cluster attach` reads them from there, for the image's own release, without running the image.
 
-```sh
-cub variant upload --component k8sbot --variant base --granularity per-file \
-  oci://ghcr.io/confighub/configs/k8sbot
-```
+### Installer package
+
+`manifests/package` is an [installer](https://github.com/confighub/installer) package for k8sbot, published as `oci://ghcr.io/confighub/packages/k8sbot`. It is a common base plus one component per controller, `argocd` by default. Its inputs are all optional, so an install can be a base that ConfigHub variants are cloned from. As with the manifests, the `k8sbot-secrets` Secret is not part of it. The Deployment runs a pinned image tag, never `latest`. See [its README](manifests/package/README.md).
 
 ## Upgrading from 0.1
 
@@ -220,9 +196,10 @@ go build ./...        # compile
 docker build -t ghcr.io/confighub/k8sbot:dev .
 ```
 
-Two workflows, two cadences:
+Three workflows:
 
 - `.github/workflows/build.yml` builds and pushes **development** images to `ghcr.io/confighub/k8sbot` on pushes to `main` and on PRs (tags `main`, `pr-N`, `sha-…`). No semver, no `:latest`.
-- `.github/workflows/release.yml` cuts a **release** when you push a `vX.Y.Z` git tag: it builds the semver image (`:vX.Y.Z`, plus `:latest`) and republishes the config bundle pinned to it. The bundle is also republished on every `main` push, pinned to the current latest tag, so a config-only change ships without a new image. The pinned version is never committed, so there is no commit-to-release cycle.
+- `.github/workflows/release.yml` cuts a **release** when you push a `vX.Y.Z` git tag: it builds the semver image (`:vX.Y.Z`, plus `:latest`), with the manifests in it, then publishes the installer package to `oci://ghcr.io/confighub/packages/k8sbot:X.Y.Z`, signed. The manifests and the package name the release they run, so set it first: `scripts/set-version.sh vX.Y.Z`, merge that, then push the tag. `release.yml` fails for a tag they don't name. A manifest or package change ships with the next release.
+- `.github/workflows/package.yml` tests the **installer package** in `manifests/package` with `scripts/test-package.sh`, which you can run locally.
 
 Every image carries its third-party notices at `/app/THIRD_PARTY_LICENSES.txt` (Go modules linked into the binary) and `/app/OS_LICENSE_NOTICE.txt` (Alpine base packages, with the GPL source offer), and every published manifest has an SPDX SBOM attestation (`docker buildx imagetools inspect ghcr.io/confighub/k8sbot:<tag> --format '{{json .SBOM}}'`). After changing dependencies, run `./scripts/gen-third-party-licenses.sh` and commit the result; `.github/workflows/third-party-licenses.yml` fails the PR if the committed file is stale or a copyleft dependency is linked in.

@@ -1,0 +1,61 @@
+# Copyright (C) ConfigHub, Inc.
+# SPDX-License-Identifier: MIT
+
+name: package
+
+# Tests k8sbot's installer package (manifests/package). release.yml publishes
+# it, after the image it runs.
+on:
+  push:
+    branches: [main]
+    paths:
+      - manifests/package/**
+      - scripts/test-package.sh
+      - .github/workflows/package.yml
+      # The environment the package's schema is generated from.
+      - config.go
+      - docgen.go
+  pull_request:
+    paths:
+      - manifests/package/**
+      - scripts/test-package.sh
+      - .github/workflows/package.yml
+      # The environment the package's schema is generated from.
+      - config.go
+      - docgen.go
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  # release.yml installs the same one.
+  INSTALLER_VERSION: v0.3.0
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # test-package.sh compares the package's env schema with docgen env.
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install the installer
+        run: |
+          set -euo pipefail
+          base="https://github.com/confighub/installer/releases/download/${INSTALLER_VERSION}"
+          curl -fsSLO "${base}/installer-linux-amd64"
+          curl -fsSLO "${base}/installer-linux-amd64.sha256"
+          sha256sum -c installer-linux-amd64.sha256
+          install -m 0755 installer-linux-amd64 /usr/local/bin/installer
+          rm installer-linux-amd64 installer-linux-amd64.sha256
+
+      # Renders the package for each controller and preset with this
+      # installer, running its validators, and checks the renders it refuses.
+      # Run it locally the same way.
+      - name: Test the package
+        run: scripts/test-package.sh

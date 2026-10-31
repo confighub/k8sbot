@@ -1,0 +1,128 @@
+# Copyright (C) ConfigHub, Inc.
+# SPDX-License-Identifier: MIT
+apiVersion: installer.confighub.com/v1alpha1
+kind: Package
+metadata:
+  name: k8sbot
+installerMetadata:
+  # The k8sbot release the package runs; release.yml sets it.
+  version: 0.2.8
+  # componentGroups and vet-pod-security-standard.
+  installerVersion: ">= 0.3.0"
+spec:
+  bases:
+    - name: default
+      path: bases/default
+      default: true
+      description: |
+        What k8sbot needs under every GitOps controller: its Namespace,
+        ServiceAccount, cluster-wide read-only access, and the Deployment,
+        which reads its service account key from the k8sbot-secrets Secret,
+        supplied out of band. The controller group adds what one GitOps
+        controller needs.
+
+  components:
+    - name: argocd
+      path: components/argocd
+      default: true
+      description: |
+        Drive Argo CD: patch an Application's refresh annotation to force a
+        sync, and report each Application's status to the Release it runs.
+        Grants k8sbot access to the argocd namespace.
+    - name: flux
+      path: components/flux
+      description: |
+        Drive Flux 2.6 or later: request a reconciliation of the OCIRepository
+        that pulls a Space, and report status from the Kustomizations that
+        apply it.
+    - name: sveltos
+      path: components/sveltos
+      description: |
+        Drive Sveltos, on its management cluster: redeploy the profile that
+        deploys a Space, and report status from HealthCheckReports, which the
+        HealthCheck and ClusterHealthCheck this component adds produce.
+
+  componentGroups:
+    - name: controller
+      description: The GitOps controller k8sbot drives.
+      components: [argocd, flux, sveltos]
+      required: true
+
+  # Every input is optional: an install uploaded as a base for ConfigHub
+  # variants leaves them unset, and each variant sets them for its cluster. An
+  # unset Channel or Target stays confighubplaceholder, which a deployment
+  # must set first.
+  inputs:
+    - name: channel
+      type: string
+      default: ""
+      prompt: Channel k8sbot listens on, as <space>/<slug> (optional)
+      description: |
+        The ConfigHub Channel k8sbot claims, subscribed to release.published.
+        Create it with `cub channel create`. Unset is confighubplaceholder.
+    - name: target
+      type: string
+      default: ""
+      prompt: Target that represents this cluster, as <space>/<slug> (optional)
+      description: |
+        The Target k8sbot stores facts about the cluster on at startup. Needs
+        Edit on the Target. Unset is confighubplaceholder.
+    - name: confighub_url
+      type: string
+      default: https://hub.confighub.com
+      prompt: ConfigHub URL as the cluster reaches it
+      description: |
+        The ConfigHub server k8sbot connects to.
+
+  validation:
+    envSchema: validation/env.schema.json
+    howToRegenerate: |
+      From the root of the k8sbot repository:
+
+        go run . docgen env > manifests/package/validation/env.schema.json
+
+      scripts/test-package.sh fails when the committed schema differs.
+
+  transformers:
+    # The base's resources are in confighubplaceholder. Naming it as the old
+    # namespace leaves resources in any other namespace where they are: the
+    # argocd component's Role and RoleBinding. The sveltos component's
+    # HealthCheck and ClusterHealthCheck are cluster-scoped, which SDK releases
+    # before v0.9.10 don't know.
+    - toolchain: Kubernetes/YAML
+      description: Put k8sbot in the install namespace.
+      invocations:
+        - name: set-namespace
+          args:
+            - "{{ .Namespace }}"
+            - confighubplaceholder
+            - lib.projectsveltos.io/v1beta1/HealthCheck,lib.projectsveltos.io/v1beta1/ClusterHealthCheck
+    - toolchain: AppConfig/Env
+      description: Connect k8sbot to ConfigHub.
+      invocations:
+        - name: set-string-path
+          args: [K8sbot, CONFIGHUB_URL, "{{ or .Inputs.confighub_url \"confighubplaceholder\" }}"]
+        - name: set-string-path
+          args: [K8sbot, CONFIGHUB_CHANNEL, "{{ or .Inputs.channel \"confighubplaceholder\" }}"]
+        - name: set-string-path
+          args: [K8sbot, CONFIGHUB_TARGET, "{{ or .Inputs.target \"confighubplaceholder\" }}"]
+
+  validators:
+    - toolchain: Kubernetes/YAML
+      invocations:
+        - name: vet-schemas
+        - name: vet-merge-keys
+        - name: vet-format
+        # A tag must be pinned: no :latest, and no untagged image, which means
+        # latest. A colon counts as a tag only in the last path segment, so a
+        # registry port is not one.
+        - name: vet-images
+          args: ['{"DenyRegexp": "(:latest$)|^([^/]+/)*[^/:@]+$"}']
+        - name: vet-pod-security-standard
+          args: [restricted]
+    - toolchain: AppConfig/Env
+      description: k8sbot's environment has only the variables k8sbot reads, with values it accepts.
+      invocations:
+        - name: vet-jsonschema
+          args:
+            - '{"K8sbot": {{ loadJSON "validation/env.schema.json" }} }'
