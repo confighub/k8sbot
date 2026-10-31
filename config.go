@@ -4,17 +4,21 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"strings"
+
+	"github.com/sethvargo/go-envconfig"
 )
 
 // config holds k8sbot's runtime configuration, all sourced from the environment.
 //
 // The ConfigHub key identifies k8sbot to ConfigHub; the Channel is the mailbox
-// it listens on. The Argo CD credentials are k8sbot's own authority against
-// Argo CD — held out of band, never brokered through ConfigHub.
+// it listens on. Its authority against the GitOps controller is the Kubernetes
+// ServiceAccount it runs as (or a local kubeconfig), never brokered through
+// ConfigHub.
 //
 // k8sbot reacts to the ConfigHub events its Channel subscribes to: release
 // facts, scoped on the Channel to whatever Spaces or Targets the
@@ -53,27 +57,14 @@ type config struct {
 	// up (defaults to "flux-system"). Flux only.
 	FluxNamespace string
 
-	// ArgoSyncMode selects how k8sbot triggers a sync: "kubernetes" (default)
-	// patches the Application's refresh annotation via the Kubernetes API;
-	// "argocd" calls the Argo CD REST /sync endpoint.
-	ArgoSyncMode string
-
-	ArgoServer   string
-	ArgoToken    string
-	ArgoInsecure bool
-
-	// Kubernetes-mode settings. ArgoNamespace is where the Application resources
-	// live (defaults to "argocd"). ArgoRefreshType is "hard" or "normal".
+	// ArgoNamespace is where the Application resources live (defaults to
+	// "argocd"). ArgoRefreshType is "hard" or "normal".
 	ArgoNamespace   string
 	ArgoRefreshType string
 
-	// Force-sync behaviour. ArgoApp, when set, is the single Application every
-	// matching event force-syncs (the simplest deployment). AppNamespace, Prune,
-	// and Force are passed through to the sync request.
-	ArgoApp          string
-	ArgoAppNamespace string
-	ArgoPrune        bool
-	ArgoForce        bool
+	// ArgoApp, when set, is the single Application every matching event
+	// force-syncs (the simplest deployment).
+	ArgoApp string
 
 	// ReportLiveStatus enables the reporter that watches Argo CD Applications and
 	// writes their status back to the Release each one is running. On by default;
@@ -83,8 +74,8 @@ type config struct {
 	ReportLiveStatus bool
 }
 
-// retiredEnv names the variables k8sbot read when it connected as a worker, each
-// with why it no longer does. One that is still set is ignored with a warning
+// retiredEnv names the variables k8sbot read when it connected as a worker or
+// could sync through the Argo CD REST API, each with why it no longer does. One that is still set is ignored with a warning
 // rather than silently: a deployment that sets it expects it to do something.
 var retiredEnv = []struct{ name, reason string }{
 	{"CONFIGHUB_WORKER_ID", "k8sbot authenticates with the service account key in CONFIGHUB_AUTH_PRIVATE_KEY"},
@@ -92,34 +83,55 @@ var retiredEnv = []struct{ name, reason string }{
 	{"CONFIGHUB_SUBSCRIPTION_NAME", "the events k8sbot receives are the Subscriptions of its channel"},
 	{"CONFIGHUB_EVENT_SPACE_ID", "the events k8sbot receives are the Subscriptions of its channel"},
 	{"CONFIGHUB_EVENT_TARGET_ID", "the events k8sbot receives are the Subscriptions of its channel"},
+	{"ARGO_SYNC_MODE", "k8sbot syncs Argo CD Applications through the Kubernetes API only"},
+	{"ARGOCD_SERVER", "k8sbot syncs Argo CD Applications through the Kubernetes API only"},
+	{"ARGOCD_AUTH_TOKEN", "k8sbot syncs Argo CD Applications through the Kubernetes API only"},
+	{"ARGOCD_INSECURE", "k8sbot syncs Argo CD Applications through the Kubernetes API only"},
+	{"ARGO_APP_NAMESPACE", "k8sbot syncs Argo CD Applications through the Kubernetes API only; set ARGO_NAMESPACE"},
+	{"ARGO_PRUNE", "k8sbot syncs Argo CD Applications through the Kubernetes API only; set prune in the Application's syncPolicy"},
+	{"ARGO_FORCE", "k8sbot syncs Argo CD Applications through the Kubernetes API only"},
+}
+
+// envVars is k8sbot's environment: go-envconfig reads it, and `k8sbot docgen
+// env` describes it as a JSON Schema, whose property names are the json tags and
+// whose descriptions, defaults and allowed values are the description, default
+// and enum tags. Every variable is a string, as an environment variable is. An
+// empty one is the same as an unset one, so loadConfig applies the defaults
+// rather than go-envconfig, which would keep an empty value.
+type envVars struct {
+	ConfigHubURL      string `env:"CONFIGHUB_URL" json:"CONFIGHUB_URL" description:"Base URL of the ConfigHub API, as k8sbot reaches it. Required."`
+	PrivateKey        string `env:"CONFIGHUB_AUTH_PRIVATE_KEY" json:"CONFIGHUB_AUTH_PRIVATE_KEY" description:"Private JWK of the ConfigHub service account k8sbot authenticates as, as cub serviceaccount key add --generate writes it. Required; supply it from a Secret."`
+	AssertionAudience string `env:"CONFIGHUB_ASSERTION_AUDIENCE" json:"CONFIGHUB_ASSERTION_AUDIENCE" description:"Audience of the assertions k8sbot signs. Set it only for a server whose CONFIGHUB_ASSERTION_AUDIENCE is not the default."`
+	Channel           string `env:"CONFIGHUB_CHANNEL" json:"CONFIGHUB_CHANNEL" description:"ConfigHub Channel k8sbot claims and polls, as space/slug or a UUID. Its Subscriptions, set with cub, decide which events k8sbot receives. Required."`
+	Target            string `env:"CONFIGHUB_TARGET" json:"CONFIGHUB_TARGET" description:"ConfigHub Target that represents the cluster, as space/slug or a UUID. When set, k8sbot stores facts about the cluster on it at startup, which needs Edit on the Target."`
+	Controller        string `env:"GITOPS_CONTROLLER" json:"GITOPS_CONTROLLER" default:"argocd" enum:"argocd,sveltos,flux" description:"GitOps controller k8sbot drives."`
+	FluxNamespace     string `env:"FLUX_NAMESPACE" json:"FLUX_NAMESPACE" default:"flux-system" description:"Flux only: where k8sbot looks for the OCIRepository named after a Space when listing OCIRepositories fails."`
+	ArgoNamespace     string `env:"ARGO_NAMESPACE" json:"ARGO_NAMESPACE" default:"argocd" description:"Argo CD only: namespace holding the Applications."`
+	ArgoRefreshType   string `env:"ARGO_REFRESH_TYPE" json:"ARGO_REFRESH_TYPE" default:"hard" enum:"hard,normal" description:"Argo CD only: refresh to request. hard re-resolves the source, including an OCI tag's digest."`
+	ArgoApp           string `env:"ARGO_APP" json:"ARGO_APP" description:"Argo CD only: the one Application every event syncs. Unset, the event's Space names the Applications to sync."`
+	ReportLiveStatus  string `env:"CONFIGHUB_REPORT_LIVE_STATUS" json:"CONFIGHUB_REPORT_LIVE_STATUS" default:"true" enum:"true,false" description:"Whether k8sbot writes the status of what the controller deployed to each Release's LiveStatus."`
 }
 
 func loadConfig() (config, error) {
+	var env envVars
+	if err := envconfig.Process(context.Background(), &env); err != nil {
+		return config{}, fmt.Errorf("read the environment: %w", err)
+	}
 	cfg := config{
-		ConfigHubURL:      os.Getenv("CONFIGHUB_URL"),
-		PrivateKey:        os.Getenv("CONFIGHUB_AUTH_PRIVATE_KEY"),
-		AssertionAudience: os.Getenv("CONFIGHUB_ASSERTION_AUDIENCE"),
-		Channel:           os.Getenv("CONFIGHUB_CHANNEL"),
-		Target:            os.Getenv("CONFIGHUB_TARGET"),
-		Controller:        os.Getenv("GITOPS_CONTROLLER"),
-		FluxNamespace:     os.Getenv("FLUX_NAMESPACE"),
-		ArgoSyncMode:      os.Getenv("ARGO_SYNC_MODE"),
-		ArgoServer:        strings.TrimRight(os.Getenv("ARGOCD_SERVER"), "/"),
-		ArgoToken:         os.Getenv("ARGOCD_AUTH_TOKEN"),
-		ArgoInsecure:      os.Getenv("ARGOCD_INSECURE") == "true",
-		ArgoNamespace:     os.Getenv("ARGO_NAMESPACE"),
-		ArgoRefreshType:   os.Getenv("ARGO_REFRESH_TYPE"),
-		ArgoApp:           os.Getenv("ARGO_APP"),
-		ArgoAppNamespace:  os.Getenv("ARGO_APP_NAMESPACE"),
-		ArgoPrune:         os.Getenv("ARGO_PRUNE") == "true",
-		ArgoForce:         os.Getenv("ARGO_FORCE") == "true",
-		ReportLiveStatus:  os.Getenv("CONFIGHUB_REPORT_LIVE_STATUS") != "false",
+		ConfigHubURL:      env.ConfigHubURL,
+		PrivateKey:        env.PrivateKey,
+		AssertionAudience: env.AssertionAudience,
+		Channel:           env.Channel,
+		Target:            env.Target,
+		Controller:        env.Controller,
+		FluxNamespace:     env.FluxNamespace,
+		ArgoNamespace:     env.ArgoNamespace,
+		ArgoRefreshType:   env.ArgoRefreshType,
+		ArgoApp:           env.ArgoApp,
+		ReportLiveStatus:  env.ReportLiveStatus != "false",
 	}
 	if cfg.Controller == "" {
 		cfg.Controller = ControllerArgoCD
-	}
-	if cfg.ArgoSyncMode == "" {
-		cfg.ArgoSyncMode = SyncModeKubernetes
 	}
 	if cfg.ArgoNamespace == "" {
 		cfg.ArgoNamespace = "argocd"
@@ -135,25 +147,14 @@ func loadConfig() (config, error) {
 	}
 	switch cfg.Controller {
 	case ControllerArgoCD:
-		switch cfg.ArgoSyncMode {
-		case SyncModeKubernetes:
-			// No extra required vars: in-cluster credentials come from the
-			// ServiceAccount, and ARGO_NAMESPACE has a default.
-		case SyncModeArgoCD:
-			required["ARGOCD_SERVER"] = cfg.ArgoServer
-			required["ARGOCD_AUTH_TOKEN"] = cfg.ArgoToken
-		default:
-			return config{}, fmt.Errorf("invalid ARGO_SYNC_MODE %q: must be %q or %q",
-				cfg.ArgoSyncMode, SyncModeKubernetes, SyncModeArgoCD)
-		}
+		// No extra required vars: in-cluster credentials come from the
+		// ServiceAccount, and ARGO_NAMESPACE has a default.
 	case ControllerSveltos, ControllerFlux:
 		// No extra required vars: in-cluster credentials come from the
-		// ServiceAccount. The ARGO_*/ARGOCD_* settings are Argo-only; clear them so
-		// none of them, ARGO_APP above all, changes what a Sveltos or Flux
-		// deployment syncs.
-		cfg.ArgoSyncMode, cfg.ArgoApp, cfg.ArgoAppNamespace = "", "", ""
-		cfg.ArgoServer, cfg.ArgoToken, cfg.ArgoNamespace, cfg.ArgoRefreshType = "", "", "", ""
-		cfg.ArgoInsecure, cfg.ArgoPrune, cfg.ArgoForce = false, false, false
+		// ServiceAccount. The ARGO_* settings are Argo-only; clear them so none of
+		// them, ARGO_APP above all, changes what a Sveltos or Flux deployment
+		// syncs.
+		cfg.ArgoApp, cfg.ArgoNamespace, cfg.ArgoRefreshType = "", "", ""
 	default:
 		return config{}, fmt.Errorf("invalid GITOPS_CONTROLLER %q: must be %q, %q or %q",
 			cfg.Controller, ControllerArgoCD, ControllerSveltos, ControllerFlux)

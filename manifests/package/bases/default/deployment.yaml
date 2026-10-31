@@ -1,0 +1,66 @@
+# Copyright (C) ConfigHub, Inc.
+# SPDX-License-Identifier: MIT
+#
+# Its environment is the k8sbot-env ConfigMap, made from k8sbot.env and the
+# controller component's env file.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k8sbot
+  namespace: confighubplaceholder
+  labels:
+    app: k8sbot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: k8sbot
+  template:
+    metadata:
+      labels:
+        app: k8sbot
+      annotations:
+        confighub.com/Hash: confighubplaceholder
+    spec:
+      serviceAccountName: k8sbot
+      # Meets the Pod Security Standards "restricted" level. The image runs as
+      # 1000:3000.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 3000
+        fsGroup: 2000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: k8sbot
+          image: ghcr.io/confighub/k8sbot:v0.2.8
+          # k8sbot-env holds every variable but the key. ConfigHub sets
+          # confighub.com/Hash below to the ConfigMap's content hash, so a
+          # change to it rolls the pods.
+          envFrom:
+            - configMapRef:
+                name: k8sbot-env
+          env:
+            # The service account key k8sbot authenticates with: a private
+            # JWK, as `cub serviceaccount key add --generate` writes it. The
+            # Secret is not part of the package: create it in the install
+            # namespace yourself, or with your secret store.
+            - name: CONFIGHUB_AUTH_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: k8sbot-secrets
+                  key: CONFIGHUB_AUTH_PRIVATE_KEY
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]

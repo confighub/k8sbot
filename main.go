@@ -15,6 +15,8 @@
 //
 // With --print-subscriptions it prints the Subscriptions its Channel should
 // have, for `cub channel create ... --subscriptions -`.
+//
+// `k8sbot docgen env` prints k8sbot's environment variables as a JSON Schema.
 package main
 
 import (
@@ -23,6 +25,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 	"os/signal"
 	"syscall"
 
@@ -32,6 +35,13 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "docgen" {
+		if err := runDocgen(os.Args[2:], os.Stdout); err != nil {
+			log.Fatalf("[FATAL] %v", err)
+		}
+		return
+	}
+
 	printSubscriptions := flag.Bool("print-subscriptions", false, "print the Channel subscriptions k8sbot expects and exit")
 	flag.Parse()
 	if *printSubscriptions {
@@ -83,7 +93,7 @@ func main() {
 
 	// Alongside the channel, optionally watch Argo CD Applications and report
 	// their live status back to ConfigHub. It needs Kubernetes access; if the
-	// client cannot be built (e.g. argocd sync mode with no cluster access), skip
+	// client cannot be built (e.g. run out of cluster with no kubeconfig), skip
 	// it with a warning rather than failing the bot.
 	if cfg.ReportLiveStatus {
 		if rep, err := newReporter(cfg, hub); err != nil {

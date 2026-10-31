@@ -1,12 +1,14 @@
 module github.com/confighub/k8sbot
 
-go 1.25.0
+go 1.26.0
 
 require (
-	github.com/confighub/sdk/core v0.8.31
-	github.com/confighub/sdk/k8sutil v0.8.31
+	github.com/confighub/sdk/core v0.9.15
+	github.com/confighub/sdk/k8sutil v0.9.15
 	github.com/google/uuid v1.6.0
-	golang.org/x/sync v0.21.0
+	github.com/sethvargo/go-envconfig v1.3.0
+	github.com/swaggest/jsonschema-go v0.3.78
+	golang.org/x/sync v0.23.0
 	k8s.io/apimachinery v0.35.1
 	k8s.io/client-go v0.35.1
 )
@@ -45,21 +47,19 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/sergi/go-diff v1.3.2-0.20230802210424-5b0b94c5c0d3 // indirect
-	github.com/sethvargo/go-envconfig v1.3.0 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
-	github.com/swaggest/jsonschema-go v0.3.78 // indirect
 	github.com/swaggest/refl v1.4.0 // indirect
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xlab/treeprint v1.2.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/net v0.56.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/oauth2 v0.30.0 // indirect
-	golang.org/x/sys v0.46.0 // indirect
-	golang.org/x/term v0.44.0 // indirect
-	golang.org/x/text v0.38.0 // indirect
-	golang.org/x/time v0.9.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
+	golang.org/x/term v0.46.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/protobuf v1.36.8 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect

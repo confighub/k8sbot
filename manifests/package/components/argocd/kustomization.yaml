@@ -1,0 +1,22 @@
+# Copyright (C) ConfigHub, Inc.
+# SPDX-License-Identifier: MIT
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - role.yaml
+# The variables k8sbot reads to drive Argo CD, merged into the base's.
+configMapGenerator:
+  - name: k8sbot-env
+    namespace: confighubplaceholder
+    behavior: merge
+    envs:
+      - argocd.env
+patches:
+  # Read Applications, for live status.
+  - target:
+      kind: ClusterRole
+      name: k8sbot-read
+    patch: |-
+      - op: add
+        path: /rules/1/apiGroups/-
+        value: argoproj.io

@@ -1,0 +1,28 @@
+# Copyright (C) ConfigHub, Inc.
+# SPDX-License-Identifier: MIT
+#
+# Forcing a redeploy: k8sbot patches the profile.projectsveltos.io/redeploy
+# annotation on the ClusterProfile (cluster-scoped) or Profile (namespaced) that
+# deploys a Space. Sveltos's profiles aren't confined to one namespace, so this is
+# a ClusterRole; it grants nothing beyond reading and patching profiles.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: k8sbot-sveltos
+rules:
+  - apiGroups: ["config.projectsveltos.io"]
+    resources: ["clusterprofiles", "profiles"]
+    verbs: ["get", "list", "watch", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: k8sbot-sveltos
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: k8sbot-sveltos
+subjects:
+  - kind: ServiceAccount
+    name: k8sbot
+    namespace: confighubplaceholder
