@@ -32,10 +32,8 @@ type config struct {
 
 	// PrivateKey is the service account key k8sbot authenticates with, as a
 	// private JWK. It signs a short-lived assertion per session, so ConfigHub
-	// holds only the public half. AssertionAudience is needed only on a server
-	// that sets CONFIGHUB_ASSERTION_AUDIENCE to something other than its default.
-	PrivateKey        string
-	AssertionAudience string
+	// holds only the public half.
+	PrivateKey string
 
 	// Channel names the ConfigHub Channel k8sbot claims and polls, as
 	// <space>/<slug> or a UUID. What it delivers — which event types, for which
@@ -72,14 +70,22 @@ type config struct {
 	// access (in-cluster or a kubeconfig); when it cannot reach the cluster it is
 	// skipped with a warning rather than failing the bot.
 	ReportLiveStatus bool
+
+	// MetricsEnabled turns the Prometheus metrics server on (the default). Set
+	// METRICS_ENABLED=false and k8sbot opens no metrics port and its counters
+	// stay no-ops.
+	MetricsEnabled bool
+
+	// MetricsAddr is the address k8sbot serves its Prometheus metrics on, at
+	// /metrics (defaults to ":9090").
+	MetricsAddr string
 }
 
-// retiredEnv names the variables k8sbot read when it connected as a worker or
-// could sync through the Argo CD REST API, each with why it no longer does. One that is still set is ignored with a warning
+// retiredEnv names the variables an earlier k8sbot read, for its subscriptions, its
+// assertion audience or the Argo CD REST API, each with why it no longer does. One that is still set is ignored with a warning
 // rather than silently: a deployment that sets it expects it to do something.
 var retiredEnv = []struct{ name, reason string }{
-	{"CONFIGHUB_WORKER_ID", "k8sbot authenticates with the service account key in CONFIGHUB_AUTH_PRIVATE_KEY"},
-	{"CONFIGHUB_WORKER_SECRET", "k8sbot authenticates with the service account key in CONFIGHUB_AUTH_PRIVATE_KEY"},
+	{"CONFIGHUB_ASSERTION_AUDIENCE", "k8sbot signs its assertions for ConfigHub's token endpoint"},
 	{"CONFIGHUB_SUBSCRIPTION_NAME", "the events k8sbot receives are the Subscriptions of its channel"},
 	{"CONFIGHUB_EVENT_SPACE_ID", "the events k8sbot receives are the Subscriptions of its channel"},
 	{"CONFIGHUB_EVENT_TARGET_ID", "the events k8sbot receives are the Subscriptions of its channel"},
@@ -99,17 +105,18 @@ var retiredEnv = []struct{ name, reason string }{
 // empty one is the same as an unset one, so loadConfig applies the defaults
 // rather than go-envconfig, which would keep an empty value.
 type envVars struct {
-	ConfigHubURL      string `env:"CONFIGHUB_URL" json:"CONFIGHUB_URL" description:"Base URL of the ConfigHub API, as k8sbot reaches it. Required."`
-	PrivateKey        string `env:"CONFIGHUB_AUTH_PRIVATE_KEY" json:"CONFIGHUB_AUTH_PRIVATE_KEY" description:"Private JWK of the ConfigHub service account k8sbot authenticates as, as cub serviceaccount key add --generate writes it. Required; supply it from a Secret."`
-	AssertionAudience string `env:"CONFIGHUB_ASSERTION_AUDIENCE" json:"CONFIGHUB_ASSERTION_AUDIENCE" description:"Audience of the assertions k8sbot signs. Set it only for a server whose CONFIGHUB_ASSERTION_AUDIENCE is not the default."`
-	Channel           string `env:"CONFIGHUB_CHANNEL" json:"CONFIGHUB_CHANNEL" description:"ConfigHub Channel k8sbot claims and polls, as space/slug or a UUID. Its Subscriptions, set with cub, decide which events k8sbot receives. Required."`
-	Target            string `env:"CONFIGHUB_TARGET" json:"CONFIGHUB_TARGET" description:"ConfigHub Target that represents the cluster, as space/slug or a UUID. When set, k8sbot stores facts about the cluster on it at startup, which needs Edit on the Target."`
-	Controller        string `env:"GITOPS_CONTROLLER" json:"GITOPS_CONTROLLER" default:"argocd" enum:"argocd,sveltos,flux" description:"GitOps controller k8sbot drives."`
-	FluxNamespace     string `env:"FLUX_NAMESPACE" json:"FLUX_NAMESPACE" default:"flux-system" description:"Flux only: where k8sbot looks for the OCIRepository named after a Space when listing OCIRepositories fails."`
-	ArgoNamespace     string `env:"ARGO_NAMESPACE" json:"ARGO_NAMESPACE" default:"argocd" description:"Argo CD only: namespace holding the Applications."`
-	ArgoRefreshType   string `env:"ARGO_REFRESH_TYPE" json:"ARGO_REFRESH_TYPE" default:"hard" enum:"hard,normal" description:"Argo CD only: refresh to request. hard re-resolves the source, including an OCI tag's digest."`
-	ArgoApp           string `env:"ARGO_APP" json:"ARGO_APP" description:"Argo CD only: the one Application every event syncs. Unset, the event's Space names the Applications to sync."`
-	ReportLiveStatus  string `env:"CONFIGHUB_REPORT_LIVE_STATUS" json:"CONFIGHUB_REPORT_LIVE_STATUS" default:"true" enum:"true,false" description:"Whether k8sbot writes the status of what the controller deployed to each Release's LiveStatus."`
+	ConfigHubURL     string `env:"CONFIGHUB_URL" json:"CONFIGHUB_URL" description:"Base URL of the ConfigHub API, as k8sbot reaches it. Required."`
+	PrivateKey       string `env:"CONFIGHUB_AUTH_PRIVATE_KEY" json:"CONFIGHUB_AUTH_PRIVATE_KEY" description:"Private JWK of the ConfigHub service account k8sbot authenticates as, as cub serviceaccount key add --generate writes it. Required; supply it from a Secret."`
+	Channel          string `env:"CONFIGHUB_CHANNEL" json:"CONFIGHUB_CHANNEL" description:"ConfigHub Channel k8sbot claims and polls, as space/slug or a UUID. Its Subscriptions, set with cub, decide which events k8sbot receives. Required."`
+	Target           string `env:"CONFIGHUB_TARGET" json:"CONFIGHUB_TARGET" description:"ConfigHub Target that represents the cluster, as space/slug or a UUID. When set, k8sbot stores facts about the cluster on it at startup, which needs Edit on the Target."`
+	Controller       string `env:"GITOPS_CONTROLLER" json:"GITOPS_CONTROLLER" default:"argocd" enum:"argocd,sveltos,flux" description:"GitOps controller k8sbot drives."`
+	FluxNamespace    string `env:"FLUX_NAMESPACE" json:"FLUX_NAMESPACE" default:"flux-system" description:"Flux only: where k8sbot looks for the OCIRepository named after a Space when listing OCIRepositories fails."`
+	ArgoNamespace    string `env:"ARGO_NAMESPACE" json:"ARGO_NAMESPACE" default:"argocd" description:"Argo CD only: namespace holding the Applications."`
+	ArgoRefreshType  string `env:"ARGO_REFRESH_TYPE" json:"ARGO_REFRESH_TYPE" default:"hard" enum:"hard,normal" description:"Argo CD only: refresh to request. hard re-resolves the source, including an OCI tag's digest."`
+	ArgoApp          string `env:"ARGO_APP" json:"ARGO_APP" description:"Argo CD only: the one Application every event syncs. Unset, the event's Space names the Applications to sync."`
+	ReportLiveStatus string `env:"CONFIGHUB_REPORT_LIVE_STATUS" json:"CONFIGHUB_REPORT_LIVE_STATUS" default:"true" enum:"true,false" description:"Whether k8sbot writes the status of what the controller deployed to each Release's LiveStatus."`
+	MetricsEnabled   string `env:"METRICS_ENABLED" json:"METRICS_ENABLED" default:"true" enum:"true,false" description:"Whether k8sbot serves Prometheus metrics. false opens no metrics port."`
+	MetricsAddr      string `env:"METRICS_ADDR" json:"METRICS_ADDR" default:":9090" description:"Address k8sbot serves Prometheus metrics on, at /metrics: sync, unresolved event and live-status report counts."`
 }
 
 func loadConfig() (config, error) {
@@ -118,17 +125,18 @@ func loadConfig() (config, error) {
 		return config{}, fmt.Errorf("read the environment: %w", err)
 	}
 	cfg := config{
-		ConfigHubURL:      env.ConfigHubURL,
-		PrivateKey:        env.PrivateKey,
-		AssertionAudience: env.AssertionAudience,
-		Channel:           env.Channel,
-		Target:            env.Target,
-		Controller:        env.Controller,
-		FluxNamespace:     env.FluxNamespace,
-		ArgoNamespace:     env.ArgoNamespace,
-		ArgoRefreshType:   env.ArgoRefreshType,
-		ArgoApp:           env.ArgoApp,
-		ReportLiveStatus:  env.ReportLiveStatus != "false",
+		ConfigHubURL:     env.ConfigHubURL,
+		PrivateKey:       env.PrivateKey,
+		Channel:          env.Channel,
+		Target:           env.Target,
+		Controller:       env.Controller,
+		FluxNamespace:    env.FluxNamespace,
+		ArgoNamespace:    env.ArgoNamespace,
+		ArgoRefreshType:  env.ArgoRefreshType,
+		ArgoApp:          env.ArgoApp,
+		ReportLiveStatus: env.ReportLiveStatus != "false",
+		MetricsEnabled:   env.MetricsEnabled != "false",
+		MetricsAddr:      env.MetricsAddr,
 	}
 	if cfg.Controller == "" {
 		cfg.Controller = ControllerArgoCD
@@ -138,6 +146,9 @@ func loadConfig() (config, error) {
 	}
 	if cfg.ArgoRefreshType == "" {
 		cfg.ArgoRefreshType = "hard"
+	}
+	if cfg.MetricsAddr == "" {
+		cfg.MetricsAddr = ":9090"
 	}
 
 	required := map[string]string{

@@ -98,23 +98,15 @@ type liveStatusWriter struct {
 // releaseLookup finds the Release a controller is running from the deployment
 // Space's slug and the manifest digest the controller reports, as Argo CD and
 // Flux both do. It embeds the liveStatusWriter that writes to that Release.
+//
+// Neither lookup is cached. A Space deleted and created again with the same slug
+// has a new id, and publishing from an existing Tag, as a rollback does, makes a
+// new Release with the same manifest digest as the one the Tag was first
+// published as; a cached answer would name the deleted Space or the older
+// Release. Each lookup is a small metadata query, and a report runs only when
+// an object changes or the informer resyncs.
 type releaseLookup struct {
 	liveStatusWriter
-
-	// spaceIDs caches resolved deployment-Space slug -> id lookups, and
-	// releaseIDs resolved Space and manifest digest -> Release id lookups, which a
-	// Release's immutable content makes safe to keep. Touched only by the single
-	// worker goroutine, so they need no lock.
-	spaceIDs   map[string]uuid.UUID
-	releaseIDs map[string]uuid.UUID
-}
-
-func newReleaseLookup(writer liveStatusWriter) releaseLookup {
-	return releaseLookup{
-		liveStatusWriter: writer,
-		spaceIDs:         make(map[string]uuid.UUID),
-		releaseIDs:       make(map[string]uuid.UUID),
-	}
 }
 
 // newArgoReporter builds the Argo CD live-status reporter: a dynamic Kubernetes
@@ -133,7 +125,7 @@ func newArgoReporter(cfg config, hub *cubapi.Client) (*reporter, error) {
 	informer := factory.ForResource(kube.ApplicationsGVR).Informer()
 
 	r := &reporter{
-		releaseLookup: newReleaseLookup(liveStatusWriter{api: hub.API}),
+		releaseLookup: releaseLookup{liveStatusWriter{api: hub.API}},
 		namespace:     cfg.ArgoNamespace,
 		informer:      informer,
 		queue:         workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
@@ -174,24 +166,8 @@ func (r *reporter) Run(ctx context.Context) error {
 }
 
 func (r *reporter) runWorker(ctx context.Context) {
-	for r.processNext(ctx) {
+	for processReport(ctx, r.queue, r.report) {
 	}
-}
-
-func (r *reporter) processNext(ctx context.Context) bool {
-	key, shutdown := r.queue.Get()
-	if shutdown {
-		return false
-	}
-	defer r.queue.Done(key)
-
-	if err := r.report(ctx, key); err != nil {
-		log.Printf("[WARN] live-status reporter: %v", err)
-		r.queue.AddRateLimited(key)
-		return true
-	}
-	r.queue.Forget(key)
-	return true
 }
 
 // enqueue schedules a report for the object after the debounce window, coalescing
@@ -208,42 +184,45 @@ func (r *reporter) enqueue(obj any) {
 // report projects the current state of the Application named by key and, if it
 // changed since the last write, writes it to the LiveStatus of the Release the
 // Application is running. Applications whose Space or Release k8sbot cannot see
-// are ignored.
-func (r *reporter) report(ctx context.Context, key string) error {
+// are ignored (reportSkipped).
+func (r *reporter) report(ctx context.Context, key string) (reportOutcome, error) {
 	obj, exists, err := r.informer.GetStore().GetByKey(key)
 	if err != nil {
-		return fmt.Errorf("look up %s: %w", key, err)
+		return reportFailed, fmt.Errorf("look up %s: %w", key, err)
 	}
 	if !exists {
 		// Deleted; see the DeleteFunc note in newReporter.
 		delete(r.lastSig, key)
-		return nil
+		return reportSkipped, nil
 	}
 
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok {
-		return fmt.Errorf("unexpected object type %T for %s", obj, key)
+		return reportFailed, fmt.Errorf("unexpected object type %T for %s", obj, key)
 	}
 
 	slug := deploymentSpaceSlug(u)
-	spaceID, known := r.getSpaceID(ctx, slug)
+	spaceID, known, err := r.getSpaceID(ctx, slug)
+	if err != nil {
+		return reportFailed, err
+	}
 	if !known {
 		// Slug did not resolve to a Space k8sbot can see -- not ours.
-		return nil
+		return reportSkipped, nil
 	}
 	revision, _, _ := unstructured.NestedString(u.Object, "status", "sync", "revision")
 	if revision == "" {
 		// Argo has not resolved a revision yet, so there is no Release to report on.
-		return nil
+		return reportSkipped, nil
 	}
 	releaseID, known, err := r.getReleaseID(ctx, spaceID, revision)
 	if err != nil {
-		return err
+		return reportFailed, err
 	}
 	if !known {
 		// A revision that is no Release of the Space, such as one withdrawn and
 		// deleted: nothing to record it on.
-		return nil
+		return reportSkipped, nil
 	}
 
 	status := projectStatus(u)
@@ -252,66 +231,56 @@ func (r *reporter) report(ctx context.Context, key string) error {
 	// every pass), so an unchanged Application produces no write.
 	encoded, err := json.Marshal(status)
 	if err != nil {
-		return fmt.Errorf("marshal status signature: %w", err)
+		return reportFailed, fmt.Errorf("marshal status signature: %w", err)
 	}
 	sig := releaseID.String() + " " + string(encoded)
 	if r.lastSig[key] == sig {
-		return nil
+		return reportRecorded, nil
 	}
 
 	status.ObservedAt = time.Now().UTC()
 	if err := r.patchRelease(ctx, spaceID, releaseID, status); err != nil {
-		return err
+		return reportFailed, err
 	}
 	r.lastSig[key] = sig
 	log.Printf("[INFO] live-status: %s -> release %s of space %s (sync=%s health=%s)",
 		u.GetName(), releaseID, spaceID, status.Sync, status.Health)
-	return nil
+	return reportRecorded, nil
 }
 
-// getSpaceID resolves a deployment Space slug to its id, caching hits. k8sbot
-// can read the Spaces that release to the Target it is granted on, which are the
-// deployment Spaces it reports on, so a slug that resolves is one it is
-// responsible for. A slug that does not resolve (not found, or a Space it cannot
-// see) is treated as not-ours and skipped.
-func (r *releaseLookup) getSpaceID(ctx context.Context, slug string) (uuid.UUID, bool) {
+// getSpaceID resolves a deployment Space slug to its id. k8sbot can read the
+// Spaces that release to the Target it is granted on, which are the deployment
+// Spaces it reports on, so a slug that resolves is one it is responsible for. A
+// slug that does not resolve (not found, or a Space it cannot see) is treated as
+// not-ours and skipped; a failure to ask is an error, so the report is retried.
+func (r *releaseLookup) getSpaceID(ctx context.Context, slug string) (uuid.UUID, bool, error) {
 	if slug == "" {
-		return uuid.Nil, false
-	}
-	if id, ok := r.spaceIDs[slug]; ok {
-		return id, true
+		return uuid.Nil, false, nil
 	}
 
 	where := fmt.Sprintf("Slug = '%s'", slug)
 	resp, err := r.api.ListSpacesWithResponse(ctx, &goclientnew.ListSpacesParams{Where: &where})
 	if err != nil {
-		log.Printf("[WARN] live-status reporter: resolve space %q: %v", slug, err)
-		return uuid.Nil, false
+		return uuid.Nil, false, fmt.Errorf("resolve space %q: %w", slug, err)
 	}
 	if resp.JSON200 == nil {
-		log.Printf("[WARN] live-status reporter: resolve space %q: unexpected HTTP %d: %s",
+		return uuid.Nil, false, fmt.Errorf("resolve space %q: unexpected HTTP %d: %s",
 			slug, resp.HTTPResponse.StatusCode, string(resp.Body))
-		return uuid.Nil, false
 	}
 
 	for _, es := range *resp.JSON200 {
 		if es.Space != nil && es.Space.Slug == slug {
-			r.spaceIDs[slug] = es.Space.SpaceID
-			return es.Space.SpaceID, true
+			return es.Space.SpaceID, true, nil
 		}
 	}
-	return uuid.Nil, false
+	return uuid.Nil, false, nil
 }
 
 // getReleaseID resolves the Release of the Space whose ManifestDigest is the
-// revision Argo synced: the newest, should a republish of the same content have
-// made more than one. Hits are cached; a miss is not, since the Release may not
-// be listed yet.
+// revision Argo synced: the newest, since publishing from an existing Tag makes
+// a new Release with the digest of an earlier one. A Release deleted since Argo
+// synced it is not known.
 func (r *releaseLookup) getReleaseID(ctx context.Context, spaceID uuid.UUID, manifestDigest string) (uuid.UUID, bool, error) {
-	cacheKey := spaceID.String() + "/" + manifestDigest
-	if id, ok := r.releaseIDs[cacheKey]; ok {
-		return id, true, nil
-	}
 	where := fmt.Sprintf("ManifestDigest = '%s'", manifestDigest)
 	selectFields := "ReleaseID,ReleaseNum,SpaceID,OrganizationID"
 	resp, err := r.api.ListExtendedReleasesWithResponse(ctx, spaceID,
@@ -332,7 +301,6 @@ func (r *releaseLookup) getReleaseID(ctx context.Context, spaceID uuid.UUID, man
 	if newest == nil {
 		return uuid.Nil, false, nil
 	}
-	r.releaseIDs[cacheKey] = newest.ReleaseID
 	return newest.ReleaseID, true, nil
 }
 

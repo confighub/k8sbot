@@ -5,13 +5,12 @@
 # Renders the installer package in manifests/package the way an operator
 # would, with `installer setup`, for each controller and preset, and checks the
 # renders it has to refuse. The package's validators (vet-schemas, vet-images,
-# vet-pod-security-standard, vet-jsonschema of k8sbot's environment, ...) run
-# in every render. It also checks that validation/env.schema.json is what
-# `k8sbot docgen env` prints, and that the plain manifests run the same
-# release as the package.
+# vet-pod-security-standard, ...) run in every render. It also checks that the
+# plain manifests run the same release as the package, with the same
+# environment.
 #
-# Needs installer 0.3.0 or later (or $INSTALLER), kustomize, yq and go on
-# PATH, and no ConfigHub server.
+# Needs installer 0.3.0 or later (or $INSTALLER) and yq on PATH, and no
+# ConfigHub server.
 #
 # Usage: scripts/test-package.sh
 
@@ -38,33 +37,24 @@ tag="$(yq -r '.images[] | select(.name == "ghcr.io/confighub/k8sbot") | .newTag'
 [ "v${version}" = "$tag" ] || fail "installerMetadata.version is ${version}, but the package runs k8sbot ${tag}"
 "${repo}/scripts/set-version.sh" --check "$tag" >/dev/null || fail "the deployments in manifests/ don't all run k8sbot ${tag}"
 
-# The schema the package validates k8sbot's environment against is generated.
-if ! (cd "$repo" && go run . docgen env) | diff -u "${pkg}/validation/env.schema.json" - >&2; then
-  fail "validation/env.schema.json is stale; regenerate it with: go run . docgen env > manifests/package/validation/env.schema.json"
-fi
-
-# render <case> <installer setup args...> renders the package; RENDER_PKG
-# renders another copy of it.
+# render <case> <installer setup args...> renders the package.
 render() {
   local name=$1
   shift
-  "$installer" setup --pull "${RENDER_PKG:-$pkg}" --work-dir "${work}/${name}" "${common[@]}" "$@" \
+  "$installer" setup --pull "$pkg" --work-dir "${work}/${name}" "${common[@]}" "$@" \
     > "${work}/${name}.log" 2>&1
 }
 
-# env_of <case> <variable>: the variable's value in k8sbot's environment, the
-# k8sbot-env ConfigMap.
+# env_of <case> <variable>: the variable's value in k8sbot's environment.
 env_of() {
-  yq -r ".data.$2 // \"\"" "${work}/$1/out/manifests/configmap-k8sbot-k8sbot-env.yaml"
+  yq -r ".spec.template.spec.containers[0].env[] | select(.name == \"$2\") | .value" \
+    "${work}/$1/out/manifests/deployment-k8sbot-k8sbot.yaml"
 }
 
-# broken_copy <name> <line>: a copy of the package whose k8sbot.env has line
-# added, for a render that has to be refused.
-broken_copy() {
-  local copy="${work}/pkg-$1"
-  cp -R "$pkg" "$copy"
-  printf '%s\n' "$2" >> "${copy}/bases/default/k8sbot.env"
-  echo "$copy"
+# env_list <file>: the environment of the k8sbot Deployment in file, sorted
+# by name, one variable per line.
+env_list() {
+  yq -o json -I 0 'select(.kind == "Deployment") | .spec.template.spec.containers[0].env | sort_by(.name) | .[] | sort_keys(..)' "$1"
 }
 
 # expect_render <case> <controller> <installer setup args...>: the render
@@ -126,12 +116,43 @@ done
 for v in CONFIGHUB_CHANNEL:test/k8sbot CONFIGHUB_TARGET:test/target CONFIGHUB_URL:https://hub.example.com; do
   [ "$(env_of flux "${v%%:*}")" = "${v#*:}" ] || fail "flux: ${v%%:*} is $(env_of flux "${v%%:*}"), want ${v#*:}"
 done
-# The Deployment reads the ConfigMap ConfigHub renders in place, and rolls when
-# ConfigHub fills in its hash.
-[ "$(yq -r '.metadata.annotations["confighub.com/appconfig-mutable"]' "${work}/default/out/manifests/configmap-k8sbot-k8sbot-env.yaml")" = true ] ||
-  fail "default: k8sbot-env is not rendered in place"
-[ "$(yq -r '.spec.template.metadata.annotations["confighub.com/Hash"]' "${work}/default/out/manifests/deployment-k8sbot-k8sbot.yaml")" = confighubplaceholder ] ||
-  fail "default: the pod template has no confighub.com/Hash for ConfigHub to fill in"
+# Rendered with no inputs, as a base, each controller's Deployment has the
+# environment of its plain manifest.
+expect_render flux-base flux --select flux
+expect_render sveltos-base sveltos --select sveltos
+for case in base:k8sbot.yaml flux-base:flux/k8sbot.yaml sveltos-base:sveltos/k8sbot.yaml; do
+  if ! diff -u <(env_list "${repo}/manifests/${case#*:}") \
+    <(env_list "${work}/${case%%:*}/out/manifests/deployment-k8sbot-k8sbot.yaml") >&2; then
+    fail "${case%%:*}: the environment differs from manifests/${case#*:}"
+  fi
+done
+# Metrics are on unless the metrics input turns them off.
+[ "$(env_of base METRICS_ENABLED)" = true ] || fail "base: METRICS_ENABLED is $(env_of base METRICS_ENABLED), want true"
+expect_render no-metrics argocd --input metrics=false
+[ "$(env_of no-metrics METRICS_ENABLED)" = false ] || fail "no-metrics: METRICS_ENABLED is $(env_of no-metrics METRICS_ENABLED), want false"
+ports="$(yq -o json -I 0 '.spec.template.spec.containers[0].ports' "${work}/no-metrics/out/manifests/deployment-k8sbot-k8sbot.yaml")"
+[ "$ports" = null ] || fail "no-metrics: ports are ${ports}, want none"
+ports="$(yq -r '.spec.template.spec.containers[0].ports[].name' "${work}/base/out/manifests/deployment-k8sbot-k8sbot.yaml")"
+[ "$ports" = metrics ] || fail "base: ports are ${ports:-none}, want metrics"
+# Scrape annotations come and go with the port.
+ann="$(yq -o json -I 0 '.spec.template.metadata.annotations | sort_keys(.)' "${work}/base/out/manifests/deployment-k8sbot-k8sbot.yaml")"
+[ "$ann" = '{"prometheus.io/path":"/metrics","prometheus.io/scrape":"true"}' ] ||
+  fail "base: pod annotations are ${ann}, want the prometheus.io scrape annotations"
+ann="$(yq -o json -I 0 '.spec.template.metadata.annotations' "${work}/no-metrics/out/manifests/deployment-k8sbot-k8sbot.yaml")"
+[ "$ann" = null ] || fail "no-metrics: pod annotations are ${ann}, want none"
+# Turning metrics off removes only the prometheus.io annotations: another pod
+# annotation stays. Rendered from a copy of the package that adds one.
+cp -r "$pkg" "${work}/pkg-annotated"
+yq -i '.spec.template.metadata.annotations."example.com/keep" = "yes"' \
+  "${work}/pkg-annotated/bases/default/deployment.yaml"
+if "$installer" setup --pull "${work}/pkg-annotated" --work-dir "${work}/no-metrics-annotated" "${common[@]}" \
+  --input metrics=false > "${work}/no-metrics-annotated.log" 2>&1; then
+  ann="$(yq -o json -I 0 '.spec.template.metadata.annotations' "${work}/no-metrics-annotated/out/manifests/deployment-k8sbot-k8sbot.yaml")"
+  [ "$ann" = '{"example.com/keep":"yes"}' ] || fail "no-metrics-annotated: pod annotations are ${ann}, want example.com/keep alone"
+else
+  fail "no-metrics-annotated: render failed"
+  sed 's/^/  /' "${work}/no-metrics-annotated.log" >&2
+fi
 # The HealthCheck and ClusterHealthCheck are cluster-scoped.
 for f in healthcheck-k8sbot-live-status.yaml clusterhealthcheck-k8sbot-live-status.yaml; do
   [ -s "${work}/sveltos/out/manifests/${f}" ] || fail "sveltos: ${f} was not rendered"
@@ -140,10 +161,6 @@ done
 expect_refusal two-controllers 'are alternatives in group "controller"' --select argocd --select flux
 expect_refusal latest-image vet-images \
   --set-image ghcr.io/confighub/k8sbot=ghcr.io/confighub/k8sbot:latest
-RENDER_PKG="$(broken_copy misspelled GITOPS_CONTROLER=flux)" \
-  expect_refusal misspelled-variable "Additional property GITOPS_CONTROLER is not allowed"
-RENDER_PKG="$(broken_copy bad-value CONFIGHUB_REPORT_LIVE_STATUS=maybe)" \
-  expect_refusal bad-value "CONFIGHUB_REPORT_LIVE_STATUS"
 
 if [ "$failures" -gt 0 ]; then
   echo "${failures} check(s) failed" >&2

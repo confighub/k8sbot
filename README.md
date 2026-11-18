@@ -4,7 +4,7 @@ A ConfigHub bot that syncs Argo CD applications, Sveltos profiles, or Flux OCI s
 
 k8sbot listens on a ConfigHub Channel that subscribes to ConfigHub's event log. When ConfigHub records that a Release was published, k8sbot triggers a sync of the corresponding Argo CD Application (or, with `GITOPS_CONTROLLER=sveltos`, a redeploy of the Sveltos profile, see [Sveltos](#sveltos); or with `GITOPS_CONTROLLER=flux`, a reconciliation of the Flux OCIRepository, see [Flux](#flux)), so the change takes effect immediately instead of waiting for the controller's next reconciliation.
 
-This is a "bot" in the sense ConfigHub's Channels give the word: a process that claims a mailbox ConfigHub holds for it, rather than a Bridge worker. It is the pattern the Bridge is being replaced with.
+This is a "bot" in the sense ConfigHub's Channels give the word: a process that claims a mailbox ConfigHub holds for it and authenticates as a service account.
 
 ## How it works
 
@@ -33,9 +33,21 @@ Writes are coalesced per Application (a sync's burst of updates becomes one writ
 
 ### Cluster facts
 
-When `CONFIGHUB_TARGET` names the Target that represents the cluster, k8sbot collects facts about the cluster at startup and stores them on that Target, as `cub k8s collect` does: the Kubernetes version, the CRDs and built-in resource types it serves (by scope, as `group/version/Kind`), its storage classes and default storage class, and its ingress classes. They are kept under the reserved `Cluster.` prefix, which collection owns: k8sbot rewrites those facts and removes the ones the cluster no longer has, and leaves every fact outside the prefix alone. `Cluster.Name` cannot be discovered from the cluster, so k8sbot leaves it as it was (`cub k8s collect --cluster-name` sets it). The facts are then available to `where` filters, e.g. `Facts.Cluster.KubernetesVersion = '1.31.2'`.
+When `CONFIGHUB_TARGET` names the Target that represents the cluster, k8sbot collects facts about the cluster at startup and stores them on that Target, as `cub k8s collect` does: the Kubernetes version, the CRDs and built-in resource types it serves (by scope, as `group/version/Kind`), its storage classes and default storage class, its ingress classes, and what enforces NetworkPolicy (`Cluster.NetworkPolicyEnforcer`: `cilium`, `calico`, `antrea` or `aws-vpc-cni`, empty when the Amazon VPC CNI's policy controller is off, and left out when that cannot be told). They are kept under the reserved `Cluster.` prefix, which collection owns: k8sbot rewrites those facts and removes the ones the cluster no longer has, and leaves every fact outside the prefix alone. `Cluster.Name` cannot be discovered from the cluster, so k8sbot leaves it as it was (`cub k8s collect --cluster-name` sets it). The facts are then available to `where` filters, e.g. `Facts.Cluster.KubernetesVersion = '1.31.2'`.
 
-Collecting needs Kubernetes discovery and `list` on CustomResourceDefinitions, StorageClasses and IngressClasses, which the read-only `ClusterRole` grants, and Edit on the Target. Like live-status reporting, it is best-effort: if it fails, k8sbot logs a warning and goes on syncing. It runs once per start, so a cluster upgrade reaches the Target's facts when k8sbot next restarts. The facts describe the cluster k8sbot runs in, which under Sveltos is the management cluster. `cub cluster up` sets `CONFIGHUB_TARGET` to the cluster's Target.
+Collecting needs Kubernetes discovery and `list` on CustomResourceDefinitions, StorageClasses and IngressClasses, which the `k8sbot-read` `ClusterRole` grants, and Edit on the Target. The Amazon VPC CNI installs its PolicyEndpoint CRD whether or not it enforces NetworkPolicy, so on a cluster running it k8sbot also gets the `amazon-vpc-cni` ConfigMap in `kube-system`, which the `k8sbot-read` `Role` there grants for that one ConfigMap. Like live-status reporting, it is best-effort: if it fails, k8sbot logs a warning and goes on syncing. It runs once per start, so a cluster upgrade reaches the Target's facts when k8sbot next restarts. The facts describe the cluster k8sbot runs in, which under Sveltos is the management cluster. `cub cluster up` sets `CONFIGHUB_TARGET` to the cluster's Target.
+
+### Metrics
+
+k8sbot records its counters with OpenTelemetry and serves them in the Prometheus text format at `/metrics` on `METRICS_ADDR` (`:9090` by default), through the OpenTelemetry Prometheus exporter. Each is labeled with `controller` (the OpenTelemetry instrument name is in parentheses):
+
+- `k8sbot_syncs_total` (`k8sbot.syncs`) — sync requests to the GitOps controller, one per Application, profile or OCIRepository an event resolved to, by `result`: `success` or `failure`.
+- `k8sbot_events_unresolved_total` (`k8sbot.events.unresolved`) — `release.published` events that resolved to no Application, profile or OCIRepository, so nothing was synced. A steady rise usually means a sync target is misnamed or its OCI URL names a different Space.
+- `k8sbot_status_reports_total` (`k8sbot.status_reports`) — live-status passes over one watched object, by `result`: `success` when the object's Release was found (whether or not anything was written, since an unchanged object writes nothing), `skipped` when there was nothing to record on (the object is gone, or names no Space or Release k8sbot can see), and `failure` when the pass will be retried.
+
+A call that fails because k8sbot is shutting down is not counted as a failure. Every series is exported from the start, at zero, and the counters restart from zero with each process. `/metrics` holds only these counters: no Go runtime or process metrics, and no OpenTelemetry `target_info`, so the `OTEL_*` resource environment variables have no effect. Serving them is best-effort: if the address cannot be opened, k8sbot warns and goes on without metrics.
+
+The manifests name the container port `metrics` and set it to 9090. If you change the port in `METRICS_ADDR`, change `containerPort` to match. Set `METRICS_ENABLED=false` to turn metrics off. The plain manifests include no Service, ServiceMonitor or scrape annotations; add whichever your Prometheus uses to discover targets. The [installer package](manifests/package/README.md) adds the `prometheus.io/scrape` and `prometheus.io/path` pod annotations, which only a scrape config that reads `prometheus.io/*` honours (the Prometheus Operator needs a PodMonitor instead); with no `prometheus.io/port`, the target's port is the `metrics` containerPort.
 
 ### Sveltos
 
@@ -48,7 +60,7 @@ Collecting needs Kubernetes discovery and `list` on CustomResourceDefinitions, S
 - **Coverage.** The HealthCheck must select at least one object of every Unit, or k8sbot can't tell which revision of an unselected Unit is running and reports nothing for that Space. Reports also have a size limit (a Kubernetes object is capped at about 1.5 MiB): for big Releases, select one small object per Unit rather than everything, or split the check.
 - **One report per cluster, one `LiveStatus` per Release.** With one profile per variant per cluster, as `cub cluster up` sets up, these coincide. A Release that several clusters run is written by each cluster's report in turn.
 
-`manifests/sveltos/k8sbot.yaml` is the Sveltos deployment, for the Sveltos management cluster: a `ClusterRole` to `patch` ClusterProfiles and Profiles, the read-only `ClusterRole` extended to the `config.projectsveltos.io` and `lib.projectsveltos.io` API groups, a `HealthCheck` and `ClusterHealthCheck` that collect every object carrying `confighub.com/origin` across common kinds (extend `resourceSelectors` to cover the kinds your Releases contain), and the Deployment with `GITOPS_CONTROLLER=sveltos`.
+`manifests/sveltos/k8sbot.yaml` is the Sveltos deployment, for the Sveltos management cluster: a `ClusterRole` to `patch` ClusterProfiles and Profiles and to read ClusterSummaries and HealthCheckReports, the `k8sbot-read` `ClusterRole` for cluster facts, a `HealthCheck` and `ClusterHealthCheck` that collect every object carrying `confighub.com/origin` across common kinds (extend `resourceSelectors` to cover the kinds your Releases contain), and the Deployment with `GITOPS_CONTROLLER=sveltos`.
 
 ### Flux
 
@@ -68,7 +80,7 @@ The Kustomizations that apply one repository and speak about the same Release ar
 - **Health checks.** Set `wait: true` (or `healthChecks`) on the Kustomization. Without one, Flux never judges the health of what it applied, and k8sbot reports health `Unknown`.
 - **One `LiveStatus` per Release.** Two OCIRepositories pulling the same Space, or one Release that several clusters run, write the same Release in turn. Clusters whose Kustomizations share a namespace and name, deploying one Space, would mark each other's Releases replaced.
 
-`manifests/flux/k8sbot.yaml` is the Flux deployment: a `ClusterRole` to `patch` OCIRepositories, the read-only `ClusterRole` extended to the `source.toolkit.fluxcd.io` and `kustomize.toolkit.fluxcd.io` API groups, the Deployment with `GITOPS_CONTROLLER=flux`, and an example OCIRepository and Kustomization in its comments.
+`manifests/flux/k8sbot.yaml` is the Flux deployment: a `ClusterRole` to `patch` OCIRepositories and to read Kustomizations, the `k8sbot-read` `ClusterRole` for cluster facts, the Deployment with `GITOPS_CONTROLLER=flux`, and an example OCIRepository and Kustomization in its comments.
 
 ## Configuration
 
@@ -80,19 +92,20 @@ All configuration is via environment variables:
 | `CONFIGHUB_AUTH_PRIVATE_KEY` | yes | The service account key k8sbot authenticates with, as a private JWK (the file `cub serviceaccount key add --generate` writes) |
 | `CONFIGHUB_CHANNEL` | yes | The Channel k8sbot claims and polls, as `<space>/<slug>` or a UUID |
 | `CONFIGHUB_TARGET` | no | The Target that represents the cluster, as `<space>/<slug>` or a UUID. When set, k8sbot stores facts about the cluster on it at startup; see [Cluster facts](#cluster-facts). Needs Edit on the Target. |
-| `CONFIGHUB_ASSERTION_AUDIENCE` | no | Only for a ConfigHub server that sets `CONFIGHUB_ASSERTION_AUDIENCE` to something other than its default; must match it. |
 | `GITOPS_CONTROLLER` | no | `argocd` (default), `sveltos` or `flux`. See [Sveltos](#sveltos) and [Flux](#flux). Every `ARGO_*` variable below applies to `argocd` only. |
 | `FLUX_NAMESPACE` | no | _flux only._ Namespace of the OCIRepository named after a Space, tried when listing OCIRepositories fails. Defaults to `flux-system`. |
 | `ARGO_NAMESPACE` | no | Namespace holding the Argo CD Application resources. Defaults to `argocd`. |
 | `ARGO_REFRESH_TYPE` | no | `hard` (default) or `normal`. |
 | `ARGO_APP` | no | The single Argo CD Application every matching event syncs. If unset, the event's Space slug resolves to every Application whose OCI source names that Space, plus the one named after it. |
 | `CONFIGHUB_REPORT_LIVE_STATUS` | no | `false` to disable live-status reporting. On by default; see [Live-status reporting](#live-status-reporting). Needs Kubernetes access. |
+| `METRICS_ENABLED` | no | `false` to turn metrics off: k8sbot opens no port. On by default. See [Metrics](#metrics). |
+| `METRICS_ADDR` | no | Address to serve Prometheus metrics on, at `/metrics`. Defaults to `:9090`; changing the port means changing the manifests' `containerPort` too. See [Metrics](#metrics). |
 
-An empty variable is the same as an unset one. `k8sbot docgen env` prints these variables as a JSON Schema, with each one's description, default and allowed values; the installer package validates k8sbot's environment against it.
+An empty variable is the same as an unset one. `k8sbot docgen env` prints these variables as a JSON Schema, with each one's description, default and allowed values.
 
 When `GITOPS_CONTROLLER` is unset, k8sbot drives Argo CD. It needs no Argo CD credentials: it uses the in-cluster ServiceAccount (or a local kubeconfig when run out of cluster).
 
-Which events k8sbot receives is not configured here. It is the Channel's `Subscriptions`, set with `cub channel create --subscriptions` or `cub channel update`. The variables an earlier k8sbot read as a worker (`CONFIGHUB_WORKER_ID`, `CONFIGHUB_WORKER_SECRET`, and the subscription scope `CONFIGHUB_SUBSCRIPTION_NAME`, `CONFIGHUB_EVENT_SPACE_ID`, `CONFIGHUB_EVENT_TARGET_ID`) are ignored with a warning, as are those of the retired Argo CD REST sync mode (`ARGO_SYNC_MODE`, `ARGOCD_SERVER`, `ARGOCD_AUTH_TOKEN`, `ARGOCD_INSECURE`, `ARGO_APP_NAMESPACE`, `ARGO_PRUNE`, `ARGO_FORCE`). k8sbot now always syncs through the Kubernetes API, which deploys only when the Application has auto-sync enabled.
+Which events k8sbot receives is not configured here. It is the Channel's `Subscriptions`, set with `cub channel create --subscriptions` or `cub channel update`. The variables an earlier k8sbot read for its subscription scope (`CONFIGHUB_SUBSCRIPTION_NAME`, `CONFIGHUB_EVENT_SPACE_ID`, `CONFIGHUB_EVENT_TARGET_ID`) and its assertion audience (`CONFIGHUB_ASSERTION_AUDIENCE`) are ignored with a warning, as are those of the retired Argo CD REST sync mode (`ARGO_SYNC_MODE`, `ARGOCD_SERVER`, `ARGOCD_AUTH_TOKEN`, `ARGOCD_INSECURE`, `ARGO_APP_NAMESPACE`, `ARGO_PRUNE`, `ARGO_FORCE`). k8sbot now always syncs through the Kubernetes API, which deploys only when the Application has auto-sync enabled.
 
 ## Setup
 
@@ -142,7 +155,7 @@ A `cub unit apply` or a `cub release publish` for a (Space, Target) the Channel 
 
 k8sbot runs in the cluster alongside Argo CD. `manifests/k8sbot.yaml` is a complete, self-documenting deployment: a Namespace, a ServiceAccount, its RBAC (see below), and a Deployment whose `env` list carries **every** supported variable — defaults filled in, and the ones that must be absent by default commented out. The Deployment reads its credentials from a Secret named `k8sbot-secrets` via `secretKeyRef`; that Secret is intentionally **not** part of the manifest — supply it out of band (secret store / External Secrets, or `kubectl create secret generic k8sbot-secrets --from-literal=...`) so the manifest never ships or overwrites credential material. Its only key is `CONFIGHUB_AUTH_PRIVATE_KEY` (the private JWK).
 
-RBAC comes in two parts. A **`Role`/`RoleBinding` in the Argo CD namespace** (`argocd` by default) grants read+write there — k8sbot patches an Application's refresh annotation to force a sync, and may manage other Argo CD resources; being namespaced, it grants nothing outside `argocd`. A **`ClusterRole`/`ClusterRoleBinding`** grants cluster-wide **read-only** (`get`/`list`/`watch`) for health/status reporting across all namespaces — deliberately **excluding Secrets** (the core API group is enumerated without `secrets`; other groups are wildcarded, and Secrets exist only in core). Add a CRD's API group to that second rule to extend coverage. The Namespace, ServiceAccount, and Deployment are k8sbot's own — adjust the namespaces to match your cluster.
+RBAC grants only what k8sbot calls. A **`Role`/`RoleBinding` in the Argo CD namespace** (`argocd` by default; it must be `ARGO_NAMESPACE`) grants `get`, `list`, `watch` and `patch` on Applications: k8sbot patches an Application's refresh annotation to force a sync, and lists and watches Applications to find the ones a Space deploys and to report their status. It grants nothing else there, Secrets included, since that namespace holds the credentials of every cluster and repository Argo CD deploys with. The **`k8sbot-read` `ClusterRole`/`ClusterRoleBinding`** grants `list` on CustomResourceDefinitions, StorageClasses and IngressClasses, for [cluster facts](#cluster-facts); it is not needed if `CONFIGHUB_TARGET` is empty. The Namespace, ServiceAccount, and Deployment are k8sbot's own — adjust the namespaces to match your cluster.
 
 For Sveltos, deploy `manifests/sveltos/k8sbot.yaml` instead; see [Sveltos](#sveltos). For Flux, deploy `manifests/flux/k8sbot.yaml`; see [Flux](#flux).
 
@@ -156,18 +169,18 @@ Each manifest runs the k8sbot release it ships with, never `latest`, and leaves 
 
 ## Upgrading from 0.1
 
-k8sbot 0.1 connected as a Bridge worker and chose its own subscriptions. 0.2 listens on a Channel as a service account and reads none of the worker variables, so the two need different ConfigHub objects and a different Secret. The order below keeps the 0.1 k8sbot running until the 0.2 one works, and every step but the last is reversible. `my-cluster` is the Space holding the Target the worker is granted on.
+k8sbot 0.1 connected to ConfigHub as a Bridge worker. ConfigHub removed workers in v0.10.0, so a 0.1 k8sbot can no longer connect, and Argo CD or Flux can no longer pull with a worker ID and secret. 0.2 listens on a Channel as a service account and reads none of the worker variables. `my-cluster` is the Space holding the cluster's Target.
 
 ```sh
 # 1. The identity: a service account, a key for k8sbot, and a token for
-#    Argo CD if it pulls from ConfigHub's OCI registry with the worker's
-#    credentials. The token is printed once.
+#    Argo CD or Flux to pull from ConfigHub's OCI registry. The token is
+#    printed once.
 cub serviceaccount create k8sbot-my-cluster
 cub serviceaccount key add k8sbot-my-cluster --generate k8sbot-my-cluster
 cub serviceaccount token create k8sbot-my-cluster
 
-# 2. The grants the worker has, now for the service account too, and Edit to
-#    store the cluster's facts on the Target. The worker keeps its own.
+# 2. The grants on the Target: View and ViewChildren to pull Releases, Edit
+#    to store the cluster's facts, EditChildren to write live status.
 cub target update target --space my-cluster \
   --permission View:serviceaccount:k8sbot-my-cluster \
   --permission Edit:serviceaccount:k8sbot-my-cluster \
@@ -182,10 +195,9 @@ docker run --rm ghcr.io/confighub/k8sbot:latest --print-subscriptions \
       --subscriptions - --permission Claim:serviceaccount:k8sbot-my-cluster
 ```
 
-4. **Argo CD's pull credentials.** If Argo CD's repo-creds Secret for the ConfigHub registry carries the worker ID and secret, set its `username` to `token` and its `password` to the token from step 1. Argo CD reads the Secret at its next pull, and the token is already valid, so no pull fails. Under Flux, do the same to the pull Secret each OCIRepository's `secretRef` names.
-5. **k8sbot's Secret.** Add `CONFIGHUB_AUTH_PRIVATE_KEY`, the contents of the `.jwk` file from step 1, to `k8sbot-secrets`. The 0.1 k8sbot ignores it.
-6. **The rollout.** Move the Deployment to the 0.2 image, set `CONFIGHUB_CHANNEL=my-cluster/k8sbot`, and drop the worker and subscription variables (left in place, they only warn). A one-replica Deployment keeps the 0.1 pod until the 0.2 pod is Ready, so a missing key or Claim shows up as a crash-looping new pod beside a working old one, and reverting the Deployment undoes it. `cub channel get k8sbot --space my-cluster` shows when the 0.2 k8sbot holds the Channel.
-7. **The worker.** Once the Channel is held, delete the worker with `cub worker delete`. This is the one step the rest cannot undo.
+4. **Argo CD's pull credentials.** If Argo CD's repo-creds Secret for the ConfigHub registry carries a worker ID and secret, set its `username` to `token` and its `password` to the token from step 1. Under Flux, do the same to the pull Secret each OCIRepository's `secretRef` names.
+5. **k8sbot's Secret.** Add `CONFIGHUB_AUTH_PRIVATE_KEY`, the contents of the `.jwk` file from step 1, to `k8sbot-secrets`.
+6. **The rollout.** Move the Deployment to the 0.2 image, set `CONFIGHUB_CHANNEL=my-cluster/k8sbot`, and drop the worker and subscription variables (left in place, they only warn). `cub channel get k8sbot --space my-cluster` shows when k8sbot holds the Channel.
 
 A kind cluster from `cub cluster up` of an earlier cub is simpler to recreate than to upgrade: `cub cluster down --name <name> --delete-config`, then `cub cluster up --name <name>` with the new cub, which creates the service account and the Channel itself. `--delete-config` also deletes the deployment Spaces bound to that cluster.
 
