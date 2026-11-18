@@ -41,7 +41,6 @@
 #     secretRef:
 #       name: confighub-oci         # kubernetes.io/dockerconfigjson; username
 #                                   # "token" and password a ConfigHub token
-#                                   # (or a worker ID and its secret)
 #     # insecure: true              # only for a plain-HTTP gateway
 #   ---
 #   apiVersion: kustomize.toolkit.fluxcd.io/v1
@@ -77,10 +76,11 @@ metadata:
   name: k8sbot
   namespace: k8sbot
 ---
-# Forcing a sync: k8sbot patches the reconcile.fluxcd.io/requestedAt annotation
-# on the OCIRepository that pulls a Space. OCIRepositories aren't confined to one
-# namespace, so this is a ClusterRole; it grants nothing beyond reading and
-# patching them.
+# Flux: k8sbot patches the reconcile.fluxcd.io/requestedAt annotation on the
+# OCIRepository that pulls a Space to force a sync, and lists and watches
+# OCIRepositories and Kustomizations to find the ones a Space deploys and to
+# report their status. They aren't confined to one namespace, so this is a
+# ClusterRole; it grants nothing beyond those.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -89,6 +89,9 @@ rules:
   - apiGroups: ["source.toolkit.fluxcd.io"]
     resources: ["ocirepositories"]
     verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["kustomize.toolkit.fluxcd.io"]
+    resources: ["kustomizations"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -103,50 +106,25 @@ subjects:
     name: k8sbot
     namespace: k8sbot
 ---
-# Cluster-wide read-only access for live-status reporting: k8sbot watches Flux
-# OCIRepositories and Kustomizations in every namespace. get/list/watch only.
-#
-# Secrets are deliberately excluded: RBAC has no "all except X", and Secrets live
-# in the core ("") API group, so the core group is enumerated WITHOUT secrets,
-# while every other group is wildcarded (no Secrets exist outside core). To cover
-# a new CRD's API group, add it to the second rule's apiGroups list.
+# Cluster facts: when CONFIGHUB_TARGET is set, k8sbot reads the Kubernetes
+# version and the served resource types at startup, through discovery, which
+# every authenticated identity may read, and lists CustomResourceDefinitions,
+# StorageClasses and IngressClasses. Those are cluster-scoped, so this is a
+# ClusterRole; it grants listing them and nothing else.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: k8sbot-read
 rules:
-  # Core API group, minus Secrets.
-  - apiGroups: [""]
-    resources:
-      - pods
-      - pods/log
-      - services
-      - endpoints
-      - configmaps
-      - events
-      - namespaces
-      - nodes
-      - persistentvolumeclaims
-      - persistentvolumes
-      - replicationcontrollers
-      - resourcequotas
-      - limitranges
-      - serviceaccounts
-    verbs: ["get", "list", "watch"]
-  # All other API groups: read everything (Secrets exist only in core, above).
-  - apiGroups:
-      - apps
-      - batch
-      - autoscaling
-      - networking.k8s.io
-      - policy
-      - storage.k8s.io
-      - discovery.k8s.io
-      - apiextensions.k8s.io
-      - source.toolkit.fluxcd.io
-      - kustomize.toolkit.fluxcd.io
-    resources: ["*"]
-    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["list"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["list"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingressclasses"]
+    verbs: ["list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -155,6 +133,36 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
+  name: k8sbot-read
+subjects:
+  - kind: ServiceAccount
+    name: k8sbot
+    namespace: k8sbot
+---
+# Cluster facts: on a cluster running the Amazon VPC CNI, whether it enforces
+# NetworkPolicy is set in its amazon-vpc-cni ConfigMap, so k8sbot gets that
+# one ConfigMap and no other. Without this grant, the
+# Cluster.NetworkPolicyEnforcer fact is left out on such clusters; elsewhere
+# the Role is unused.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: k8sbot-read
+  namespace: kube-system
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["amazon-vpc-cni"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: k8sbot-read
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
   name: k8sbot-read
 subjects:
   - kind: ServiceAccount
@@ -190,7 +198,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: k8sbot
-          image: ghcr.io/confighub/k8sbot:v0.2.8
+          image: ghcr.io/confighub/k8sbot:v0.2.12
           env:
             # ── ConfigHub connection (required) ──────────────────────────────
             - name: CONFIGHUB_URL
@@ -202,9 +210,6 @@ spec:
                 secretKeyRef:
                   name: k8sbot-secrets
                   key: CONFIGHUB_AUTH_PRIVATE_KEY
-            # Only for a server whose CONFIGHUB_ASSERTION_AUDIENCE is not the default.
-            # - name: CONFIGHUB_ASSERTION_AUDIENCE
-            #   value: ""
 
             # ── Controller ───────────────────────────────────────────────────
             # "flux" forces a reconciliation by patching the OCIRepository's
@@ -239,6 +244,20 @@ spec:
             # to "false" to disable.
             # - name: CONFIGHUB_REPORT_LIVE_STATUS
             #   value: "false"
+
+            # ── Metrics ──────────────────────────────────────────────────────
+            # Address k8sbot serves Prometheus metrics on, at /metrics: sync
+            # and live-status report counts by result. Defaults to ":9090". If
+            # you change the port, change containerPort below to match. No
+            # Service or scrape annotations are included; add your own.
+            # "false" turns metrics off: k8sbot opens no port.
+            - name: METRICS_ENABLED
+              value: "true"
+            # - name: METRICS_ADDR
+            #   value: ":9090"
+          ports:
+            - name: metrics
+              containerPort: 9090
           resources:
             requests:
               cpu: 25m

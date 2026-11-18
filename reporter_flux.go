@@ -90,7 +90,7 @@ func newFluxReporter(_ config, hub *cubapi.Client) (*fluxReporter, error) {
 	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(
 		dyn, liveStatusResync, metav1.NamespaceAll, nil)
 	r := &fluxReporter{
-		releaseLookup:  newReleaseLookup(liveStatusWriter{api: hub.API}),
+		releaseLookup:  releaseLookup{liveStatusWriter{api: hub.API}},
 		sources:        factory.ForResource(flux.OCIRepositoriesGVR).Informer(),
 		kustomizations: factory.ForResource(flux.KustomizationsGVR).Informer(),
 		queue:          workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
@@ -149,29 +149,13 @@ func (r *fluxReporter) Run(ctx context.Context) error {
 	log.Printf("[INFO] live-status reporter: watching Flux OCIRepositories and Kustomizations")
 
 	go func() {
-		for r.processNext(ctx) {
+		for processReport(ctx, r.queue, r.report) {
 		}
 	}()
 
 	<-ctx.Done()
 	r.queue.ShutDown()
 	return ctx.Err()
-}
-
-func (r *fluxReporter) processNext(ctx context.Context) bool {
-	key, shutdown := r.queue.Get()
-	if shutdown {
-		return false
-	}
-	defer r.queue.Done(key)
-
-	if err := r.report(ctx, key); err != nil {
-		log.Printf("[WARN] live-status reporter: %v", err)
-		r.queue.AddRateLimited(key)
-		return true
-	}
-	r.queue.Forget(key)
-	return true
 }
 
 // enqueue schedules a report after the debounce window, coalescing a burst of
@@ -187,41 +171,45 @@ func (r *fluxReporter) enqueue(obj any) {
 
 // report projects the OCIRepository named by key and the Kustomizations that
 // apply it onto the Releases of its Space, and writes each status that differs
-// from the one the Release has. Spaces k8sbot cannot see are ignored.
-func (r *fluxReporter) report(ctx context.Context, key string) error {
+// from the one the Release has. Spaces k8sbot cannot see, and sources whose
+// digest is no Release of their Space, are ignored (reportSkipped).
+func (r *fluxReporter) report(ctx context.Context, key string) (reportOutcome, error) {
 	obj, exists, err := r.sources.GetStore().GetByKey(key)
 	if err != nil {
-		return fmt.Errorf("look up %s: %w", key, err)
+		return reportFailed, fmt.Errorf("look up %s: %w", key, err)
 	}
 	if !exists {
 		// Deleted; see the DeleteFunc note in newFluxReporter.
-		return nil
+		return reportSkipped, nil
 	}
 	source, ok := obj.(*unstructured.Unstructured)
 	if !ok {
-		return fmt.Errorf("unexpected object type %T for %s", obj, key)
+		return reportFailed, fmt.Errorf("unexpected object type %T for %s", obj, key)
 	}
 
 	slug := spaceSlugFromRepoURL(flux.URL(source))
 	if slug == "" {
 		slug = source.GetName()
 	}
-	spaceID, known := r.getSpaceID(ctx, slug)
+	spaceID, known, err := r.getSpaceID(ctx, slug)
+	if err != nil {
+		return reportFailed, err
+	}
 	if !known {
 		// Slug did not resolve to a Space k8sbot can see -- not ours.
-		return nil
+		return reportSkipped, nil
 	}
 	releases, known, err := r.listReleases(ctx, spaceID)
 	if err != nil {
-		return err
+		return reportFailed, err
 	}
 	if !known {
-		return nil
+		return reportSkipped, nil
 	}
 
 	items, err := r.kustomizations.GetIndexer().ByIndex(fluxSourceIndex, key)
 	if err != nil {
-		return fmt.Errorf("list the Kustomizations of %s: %w", key, err)
+		return reportFailed, fmt.Errorf("list the Kustomizations of %s: %w", key, err)
 	}
 	kustomizations := make([]*unstructured.Unstructured, 0, len(items))
 	for _, item := range items {
@@ -230,16 +218,22 @@ func (r *fluxReporter) report(ctx context.Context, key string) error {
 		}
 	}
 
+	writes := planFluxWrites(source, kustomizations, releases)
+	if len(writes) == 0 {
+		// No Release of the Space carries what the source fetched: nothing to
+		// record it on.
+		return reportSkipped, nil
+	}
 	var errs []error
-	for _, w := range planFluxWrites(source, kustomizations, releases) {
+	for _, w := range writes {
 		if err := r.writeIfChanged(ctx, spaceID, w); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	if len(errs) > 0 {
-		return fmt.Errorf("report %s: %v", key, errs)
+		return reportFailed, fmt.Errorf("report %s: %v", key, errs)
 	}
-	return nil
+	return reportRecorded, nil
 }
 
 // fluxWrite is one status to give one Release.
@@ -287,7 +281,7 @@ func planFluxWrites(source *unstructured.Unstructured, kustomizations []*unstruc
 		w := fluxWrite{Release: release, Status: projectFluxStatus(obs)}
 		writes = append(writes, w)
 		written[release.ReleaseID] = true
-		if w.Status.Sync == goclientnew.Synced && (running == nil || release.ReleaseNum > running.Release.ReleaseNum) {
+		if w.Status.Sync == goclientnew.ReleaseLiveStatusSyncSynced && (running == nil || release.ReleaseNum > running.Release.ReleaseNum) {
 			running = &w
 		}
 	}
@@ -351,7 +345,7 @@ func fluxReplacedStatus(was goclientnew.ReleaseLiveStatus, replacement int64) go
 	status.Reporter = liveStatusReporter
 	status.DataSource = was.DataSource
 	status.Message = fmt.Sprintf("%s %d", fluxReplacedMessage, replacement)
-	if was.Operation == goclientnew.ReleaseLiveStatusOperationFailed {
+	if was.Operation == goclientnew.Failed {
 		status.Operation = was.Operation
 		status.ReporterOperation = was.ReporterOperation
 		if was.Message != "" {
@@ -363,7 +357,7 @@ func fluxReplacedStatus(was goclientnew.ReleaseLiveStatus, replacement int64) go
 
 // fluxMarkedReplaced says a status is one planFluxWrites marked replaced.
 func fluxMarkedReplaced(ls *goclientnew.ReleaseLiveStatus) bool {
-	return ls.Sync == goclientnew.OutOfSync && strings.HasPrefix(ls.Message, fluxReplacedMessage+" ")
+	return ls.Sync == goclientnew.ReleaseLiveStatusSyncOutOfSync && strings.HasPrefix(ls.Message, fluxReplacedMessage+" ")
 }
 
 // fluxDataSource rewrites a DataSource in the form this version writes. Earlier
@@ -561,9 +555,9 @@ func readCondition(u *unstructured.Unstructured, typ string) fluxCondition {
 func projectFluxStatus(observations []fluxObservation) goclientnew.ReleaseLiveStatus {
 	syncRank := func(s goclientnew.ReleaseLiveStatusSync) int {
 		switch s {
-		case goclientnew.Synced:
+		case goclientnew.ReleaseLiveStatusSyncSynced:
 			return 0
-		case goclientnew.OutOfSync:
+		case goclientnew.ReleaseLiveStatusSyncOutOfSync:
 			return 2
 		}
 		return 1
@@ -583,11 +577,11 @@ func projectFluxStatus(observations []fluxObservation) goclientnew.ReleaseLiveSt
 	}
 	operationRank := func(o goclientnew.ReleaseLiveStatusOperation) int {
 		switch o {
-		case goclientnew.ReleaseLiveStatusOperationSucceeded:
+		case goclientnew.Succeeded:
 			return 0
-		case goclientnew.ReleaseLiveStatusOperationRunning:
+		case goclientnew.Running:
 			return 2
-		case goclientnew.ReleaseLiveStatusOperationFailed:
+		case goclientnew.Failed:
 			return 3
 		}
 		return 1

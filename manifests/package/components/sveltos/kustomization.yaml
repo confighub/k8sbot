@@ -5,22 +5,21 @@ kind: Component
 resources:
   - clusterrole.yaml
   - healthcheck.yaml
-# The variables k8sbot reads to drive Sveltos, merged into the base's.
-configMapGenerator:
-  - name: k8sbot-env
-    namespace: confighubplaceholder
-    behavior: merge
-    envs:
-      - sveltos.env
 patches:
-  # Read ClusterSummaries and HealthCheckReports, for live status.
+  # Drive Sveltos, as manifests/sveltos/k8sbot.yaml does.
   - target:
-      kind: ClusterRole
-      name: k8sbot-read
+      kind: Deployment
+      name: k8sbot
     patch: |-
-      - op: add
-        path: /rules/1/apiGroups/-
-        value: config.projectsveltos.io
-      - op: add
-        path: /rules/1/apiGroups/-
-        value: lib.projectsveltos.io
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: k8sbot
+      spec:
+        template:
+          spec:
+            containers:
+              - name: k8sbot
+                env:
+                  - name: GITOPS_CONTROLLER
+                    value: sveltos

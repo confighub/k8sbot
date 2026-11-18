@@ -4,19 +4,26 @@ apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 resources:
   - role.yaml
-# The variables k8sbot reads to drive Argo CD, merged into the base's.
-configMapGenerator:
-  - name: k8sbot-env
-    namespace: confighubplaceholder
-    behavior: merge
-    envs:
-      - argocd.env
 patches:
-  # Read Applications, for live status.
+  # The variables k8sbot reads to drive Argo CD, as manifests/k8sbot.yaml
+  # sets them. ARGO_NAMESPACE must be the Role's namespace.
   - target:
-      kind: ClusterRole
-      name: k8sbot-read
+      kind: Deployment
+      name: k8sbot
     patch: |-
-      - op: add
-        path: /rules/1/apiGroups/-
-        value: argoproj.io
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: k8sbot
+      spec:
+        template:
+          spec:
+            containers:
+              - name: k8sbot
+                env:
+                  - name: GITOPS_CONTROLLER
+                    value: argocd
+                  - name: ARGO_NAMESPACE
+                    value: argocd
+                  - name: ARGO_REFRESH_TYPE
+                    value: hard
