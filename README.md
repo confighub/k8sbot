@@ -2,8 +2,6 @@
 
 A ConfigHub bot that syncs Argo CD applications, Sveltos profiles, or Flux OCI sources.
 
-> **Not authoritative yet.** Development happens in [confighub/argobot](https://github.com/confighub/argobot) until the switch-over; this repository is synced from it with `scripts/sync-from-argobot.sh`. Open PRs and issues there.
-
 k8sbot was called argobot until v0.2.0, when it drove only Argo CD. The old image `ghcr.io/confighub/argobot` and bundle `ghcr.io/confighub/configs/argobot` stay published but get no new releases.
 
 k8sbot listens on a ConfigHub Channel that subscribes to ConfigHub's event log. When ConfigHub records that a Release was published, k8sbot triggers a sync of the corresponding Argo CD Application (or, with `GITOPS_CONTROLLER=sveltos`, a redeploy of the Sveltos profile, see [Sveltos](#sveltos); or with `GITOPS_CONTROLLER=flux`, a reconciliation of the Flux OCIRepository, see [Flux](#flux)), so the change takes effect immediately instead of waiting for the controller's next reconciliation.
