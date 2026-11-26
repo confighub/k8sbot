@@ -12,4 +12,4 @@ resources:
 images:
   - name: ghcr.io/confighub/k8sbot
     newName: ghcr.io/confighub/k8sbot
-    newTag: v0.2.12
+    newTag: v0.2.13

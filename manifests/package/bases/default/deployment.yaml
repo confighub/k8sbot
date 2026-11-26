@@ -40,7 +40,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: k8sbot
-          image: ghcr.io/confighub/k8sbot:v0.2.12
+          image: ghcr.io/confighub/k8sbot:v0.2.13
           env:
             # The ConfigHub server k8sbot connects to. The confighub_url input
             # sets it.
