@@ -34,7 +34,7 @@ fail() {
 # The package's version is the k8sbot release it runs.
 version="$(yq -r .installerMetadata.version "${pkg}/installer.yaml")"
 tag="$(yq -r '.images[] | select(.name == "ghcr.io/confighub/k8sbot") | .newTag' "${pkg}/bases/default/kustomization.yaml")"
-[ "v${version}" = "$tag" ] || fail "installerMetadata.version is ${version}, but the package runs k8sbot ${tag}"
+[ "$version" = "$tag" ] || fail "installerMetadata.version is ${version}, but the package runs k8sbot ${tag}"
 "${repo}/scripts/set-version.sh" --check "$tag" >/dev/null || fail "the deployments in manifests/ don't all run k8sbot ${tag}"
 
 # render <case> <installer setup args...> renders the package.

@@ -86,7 +86,7 @@ jobs:
 
   # Publish the installer package, which runs the image just pushed, as
   # oci://ghcr.io/confighub/packages/k8sbot:<version>, signed keylessly. Its
-  # version is the release's without the "v", and is published once.
+  # version is the release's, and is published once.
   package:
     needs: image
     runs-on: ubuntu-latest

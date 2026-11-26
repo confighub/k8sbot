@@ -5,8 +5,8 @@
 # Sets the k8sbot release the deployments name, before that release is tagged:
 # the image tag in manifests/k8sbot.yaml, manifests/flux/k8sbot.yaml and
 # manifests/sveltos/k8sbot.yaml, which the release's image carries, and in the
-# installer package in manifests/package, whose version is the release's without
-# the "v". Commit the change and merge it, then push the tag. release.yml fails
+# installer package in manifests/package, whose version is the release's.
+# Commit the change and merge it, then push the tag. release.yml fails
 # for a tag the deployments don't name.
 #
 # With --check it changes nothing and fails when the deployments name another
@@ -29,7 +29,7 @@ tag="${1:-}"
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 pkg="${repo}/manifests/package"
 manifests=("${repo}/manifests/k8sbot.yaml" "${repo}/manifests/flux/k8sbot.yaml" "${repo}/manifests/sveltos/k8sbot.yaml")
-export IMAGE=ghcr.io/confighub/k8sbot TAG="$tag" VERSION="${tag#v}"
+export IMAGE=ghcr.io/confighub/k8sbot TAG="$tag"
 
 if $check; then
   wrong=0
@@ -38,8 +38,8 @@ if $check; then
   done
   [ "$(yq -r '.images[] | select(.name == strenv(IMAGE)) | .newTag' "${pkg}/bases/default/kustomization.yaml")" = "$tag" ] \
     || { echo "manifests/package/bases/default/kustomization.yaml does not pin ${tag}" >&2; wrong=1; }
-  [ "$(yq -r .installerMetadata.version "${pkg}/installer.yaml")" = "$VERSION" ] \
-    || { echo "manifests/package/installer.yaml is not version ${VERSION}" >&2; wrong=1; }
+  [ "$(yq -r .installerMetadata.version "${pkg}/installer.yaml")" = "$tag" ] \
+    || { echo "manifests/package/installer.yaml is not version ${tag}" >&2; wrong=1; }
   [ "$wrong" = 0 ] || { echo "Run scripts/set-version.sh ${tag}, merge it, and tag again." >&2; exit 1; }
   echo "The deployments run ${IMAGE}:${tag}."
   exit 0
@@ -59,6 +59,6 @@ done
 yq_edit "${pkg}/bases/default/kustomization.yaml" '(.images[] | select(.name == strenv(IMAGE))).newTag = strenv(TAG)'
 yq_edit "${pkg}/bases/default/deployment.yaml" \
   '(.spec.template.spec.containers[] | select(.name == "k8sbot")).image = strenv(IMAGE) + ":" + strenv(TAG)'
-yq_edit "${pkg}/installer.yaml" '.installerMetadata.version = strenv(VERSION)'
+yq_edit "${pkg}/installer.yaml" '.installerMetadata.version = strenv(TAG)'
 
 "$0" --check "$tag"
