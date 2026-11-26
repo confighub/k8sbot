@@ -83,4 +83,4 @@ cub function do --space k8sbot-my-cluster --unit k8sbot \
 
 ## Publishing
 
-The package's version is the k8sbot release it runs: package 0.2.5 runs k8sbot v0.2.5. `scripts/set-version.sh vX.Y.Z` sets both before a release is tagged, and the release publishes the package after its image (`release.yml`). A version is published once, so a change to the package alone ships with the next k8sbot release.
+The package's version is the k8sbot release it runs: package v0.2.13 runs k8sbot v0.2.13. Releases through v0.2.12 published the package without the "v", as `k8sbot:0.2.12`. `scripts/set-version.sh vX.Y.Z` sets both before a release is tagged, and the release publishes the package after its image (`release.yml`). A version is published once, so a change to the package alone ships with the next k8sbot release.
