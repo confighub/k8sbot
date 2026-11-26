@@ -75,7 +75,7 @@ cub function do --space k8sbot-my-cluster --unit k8sbot \
   set-env k8sbot CONFIGHUB_CHANNEL=my-cluster/k8sbot CONFIGHUB_TARGET=my-cluster/target
 ```
 
-`cub cluster attach --k8sbot-installer` installs k8sbot this way.
+`cub cluster attach` installs k8sbot this way.
 
 ## Testing
 
